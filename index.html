@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Arnés · Entrega 1</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800&family=Figtree:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+/* Arnés: estudio de grafito alrededor de una hoja de papel con grilla azul no-foto.
+   Layout: visor a pantalla completa; en teléfono, barra inferior + hoja deslizable; en escritorio, panel a la derecha. */
+:root {
+  --graphite: #1d2023;
+  --graphite-2: #272b2f;
+  --graphite-3: #33383d;
+  --line: #3d434a;
+  --ink: #ebe8e2;
+  --muted: #9aa1a8;
+  --blue: #7cc0ea;          /* azul no-foto: el color de las líneas para lápiz */
+  --blue-deep: #3e7fb0;
+  --paper: #f1f0ec;
+  --display: "Big Shoulders Display", "Arial Narrow", sans-serif;
+  --body: "Figtree", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", monospace;
+  --bar: 52px;
+  --nav: 64px;
+  --panel-w: 320px;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--graphite);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 15px;
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+}
+button, input { font: inherit; color: inherit; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+/* Barra superior */
+header {
+  position: fixed; inset: 0 0 auto 0;
+  height: calc(var(--bar) + env(safe-area-inset-top));
+  padding: env(safe-area-inset-top) max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
+  display: flex; align-items: center; gap: 12px;
+  background: var(--graphite);
+  border-bottom: 1px solid var(--line);
+  z-index: 20;
+}
+.wordmark {
+  font-family: var(--display); font-weight: 800; font-size: 26px;
+  letter-spacing: 0.12em; line-height: 1; margin: 0;
+  display: flex; align-items: center; gap: 8px;
+}
+.wordmark svg { width: 22px; height: 22px; }
+.chip {
+  font-family: var(--mono); font-size: 12px; color: var(--ink);
+  border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px;
+  white-space: nowrap;
+}
+.release { margin-left: auto; color: var(--muted); font-size: 13px; white-space: nowrap; }
+
+/* Visor */
+#viewport {
+  position: fixed;
+  top: calc(var(--bar) + env(safe-area-inset-top));
+  left: 0; right: 0;
+  bottom: calc(var(--nav) + env(safe-area-inset-bottom));
+  background: var(--paper);
+  touch-action: none;
+}
+#viewport canvas { display: block; width: 100%; height: 100%; }
+#horizon {
+  position: absolute; left: 0; right: 0; height: 0;
+  border-top: 1.5px dashed var(--blue-deep);
+  pointer-events: none;
+}
+#horizon span {
+  position: absolute; right: 12px; top: -22px;
+  font-family: var(--mono); font-size: 11px; color: var(--blue-deep);
+  background: color-mix(in srgb, var(--paper) 85%, transparent);
+  padding: 2px 6px; border-radius: 4px;
+}
+.hud {
+  position: absolute; left: 12px; bottom: 12px;
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  pointer-events: none; max-width: calc(100% - 24px);
+}
+.hud .tag {
+  font-family: var(--mono); font-size: 12px;
+  background: var(--graphite); color: var(--ink);
+  border-radius: 6px; padding: 5px 8px;
+}
+.hud .hint { font-size: 12.5px; color: #4b5157; padding: 4px 2px; }
+
+/* Navegación inferior (teléfono) */
+nav#tabs {
+  position: fixed; left: 0; right: 0; bottom: 0;
+  height: calc(var(--nav) + env(safe-area-inset-bottom));
+  padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  background: var(--graphite); border-top: 1px solid var(--line);
+  z-index: 30;
+}
+nav#tabs button {
+  background: none; border: 0; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  color: var(--muted); font-size: 12.5px; font-weight: 500;
+}
+nav#tabs button svg { width: 22px; height: 22px; }
+nav#tabs button[aria-selected="true"] { color: var(--blue); }
+
+/* Panel / hoja */
+aside#panel {
+  position: fixed; left: 0; right: 0;
+  bottom: calc(var(--nav) + env(safe-area-inset-bottom));
+  max-height: 58%;
+  overflow-y: auto;
+  background: var(--graphite-2);
+  border-top: 1px solid var(--line);
+  border-radius: 16px 16px 0 0;
+  padding: 10px 16px 20px;
+  transform: translateY(110%);
+  transition: transform 220ms ease;
+  z-index: 25;
+}
+body.sheet-open aside#panel { transform: none; }
+.grabber { width: 40px; height: 4px; border-radius: 2px; background: var(--line); margin: 0 auto 10px; }
+section[role="tabpanel"] { display: none; }
+section[role="tabpanel"].active { display: grid; gap: 14px; }
+h2 {
+  font-family: var(--display); font-weight: 700; font-size: 22px;
+  letter-spacing: 0.06em; text-transform: uppercase; margin: 4px 0 0;
+}
+.sub { color: var(--muted); font-size: 13px; margin: -8px 0 0; }
+
+.views { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.views button {
+  background: var(--graphite-3); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 6px; cursor: pointer; font-size: 13.5px; font-weight: 500;
+  min-height: 44px;
+}
+.views button:hover { border-color: var(--blue); }
+.views button.wide { grid-column: span 3; }
+
+.readouts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.readout { background: var(--graphite); border-radius: 10px; padding: 10px; }
+.readout b { display: block; font-family: var(--mono); font-size: 17px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.readout small { color: var(--muted); font-size: 12px; }
+
+.field { display: grid; gap: 6px; }
+.field label { display: flex; justify-content: space-between; font-size: 13.5px; }
+.field label output { font-family: var(--mono); color: var(--blue); }
+input[type="range"] { width: 100%; accent-color: var(--blue); min-height: 32px; }
+.scale { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+.toggles { display: grid; gap: 2px; }
+.toggle {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 2px; border-bottom: 1px solid var(--line); cursor: pointer;
+  min-height: 48px;
+}
+.toggle:last-child { border-bottom: 0; }
+.toggle span { flex: 1; }
+.toggle small { display: block; color: var(--muted); font-size: 12px; }
+.toggle input { width: 20px; height: 20px; accent-color: var(--blue); }
+
+.soon {
+  border: 1px dashed var(--line); border-radius: 12px; padding: 14px;
+  display: grid; gap: 6px;
+}
+.soon .when { font-family: var(--mono); font-size: 12px; color: var(--blue); }
+.soon p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
+
+#error {
+  position: absolute; inset: 0; display: none; place-items: center; text-align: center;
+  color: #333; padding: 24px; font-size: 15px;
+}
+
+/* Escritorio */
+@media (min-width: 900px) {
+  :root { --nav: 0px; }
+  #viewport { right: var(--panel-w); bottom: 0; }
+  nav#tabs {
+    top: calc(var(--bar) + env(safe-area-inset-top)); bottom: auto; left: auto; right: 0;
+    width: var(--panel-w); height: 56px; padding: 0;
+    border-top: 0; border-left: 1px solid var(--line); border-bottom: 1px solid var(--line);
+    background: var(--graphite-2);
+  }
+  nav#tabs button { flex-direction: row; gap: 6px; font-size: 13px; }
+  nav#tabs button svg { width: 18px; height: 18px; }
+  aside#panel {
+    top: calc(var(--bar) + 56px + env(safe-area-inset-top)); bottom: 0; left: auto; right: 0;
+    width: var(--panel-w); max-height: none;
+    border-radius: 0; border-top: 0; border-left: 1px solid var(--line);
+    transform: none; padding: 16px 20px 24px;
+  }
+  .grabber { display: none; }
+}
+@media (max-width: 420px) { .release { display: none; } }
+@media (prefers-reduced-motion: reduce) { aside#panel { transition: none; } }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<header>
+  <h1 class="wordmark">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+      <circle cx="12" cy="4.5" r="2.5"/><path d="M12 7v7M12 14l-4 7M12 14l4 7M5 10l7-1 7 1"/>
+    </svg>ARNÉS
+  </h1>
+  <span class="chip">Viñeta 1</span>
+  <span class="release">Entrega 1 · Base</span>
+</header>
+
+<main id="viewport" aria-label="Visor 3D">
+  <div id="horizon" hidden><span id="horizon-label">Horizonte</span></div>
+  <div class="hud">
+    <span class="tag" id="hud-eye">Ojo — cm</span>
+    <span class="tag" id="hud-lens">— mm</span>
+    <span class="hint" id="hint"></span>
+  </div>
+  <div id="error"><p>No se pudo cargar el motor 3D. Revisa tu conexión y vuelve a abrir la página.</p></div>
+</main>
+
+<nav id="tabs" role="tablist" aria-label="Herramientas">
+  <button role="tab" id="tab-escena" aria-controls="p-escena" aria-selected="false">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 17l9 4 9-4M3 12l9 4 9-4M12 3l9 4-9 4-9-4 9-4z"/></svg>Escena
+  </button>
+  <button role="tab" id="tab-pose" aria-controls="p-pose" aria-selected="false">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="4.5" r="2.2"/><path d="M12 7v6l-3 8M12 13l4 8M6 9.5l6-1 5 -3"/></svg>Pose
+  </button>
+  <button role="tab" id="tab-camara" aria-controls="p-camara" aria-selected="true">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="7" width="14" height="11" rx="2"/><path d="M17 11l4-2.5v8L17 14"/></svg>Cámara
+  </button>
+  <button role="tab" id="tab-luz" aria-controls="p-luz" aria-selected="false">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9V16h7v-2.1A6 6 0 0 0 12 3z"/></svg>Luz
+  </button>
+</nav>
+
+<aside id="panel">
+  <div class="grabber" aria-hidden="true"></div>
+
+  <section role="tabpanel" id="p-escena" aria-labelledby="tab-escena">
+    <h2>Escena</h2>
+    <p class="sub">Todo está a escala real: 1 unidad = 1 metro.</p>
+    <div class="toggles">
+      <label class="toggle"><span>Figura de referencia<small>175 cm · 7.5 cabezas</small></span><input type="checkbox" id="t-figure" checked></label>
+      <label class="toggle"><span>Cubo<small>50 × 50 × 50 cm</small></span><input type="checkbox" id="t-cube" checked></label>
+      <label class="toggle"><span>Grilla<small>Líneas cada 10 cm y cada 1 m</small></span><input type="checkbox" id="t-grid" checked></label>
+      <label class="toggle"><span>Marcas de cabezas<small>Regla de proporción junto a la figura</small></span><input type="checkbox" id="t-heads" checked></label>
+    </div>
+  </section>
+
+  <section role="tabpanel" id="p-pose" aria-labelledby="tab-pose">
+    <h2>Pose</h2>
+    <div class="soon">
+      <span class="when">Entregas 3 y 4</span>
+      <p>Maniquí posable con límites en cada articulación, arrastrar manos y pies con el dedo, poses de mano, cabeza y mirada, y biblioteca de poses.</p>
+    </div>
+  </section>
+
+  <section role="tabpanel" id="p-camara" class="active" aria-labelledby="tab-camara">
+    <h2>Cámara</h2>
+    <div class="readouts">
+      <div class="readout"><b id="r-eye">—</b><small>Altura del ojo</small></div>
+      <div class="readout"><b id="r-dist">—</b><small>Distancia</small></div>
+      <div class="readout"><b id="r-lens">—</b><small>Lente</small></div>
+    </div>
+    <div class="views" role="group" aria-label="Vistas">
+      <button data-view="persp">Libre</button>
+      <button data-view="front">Frente</button>
+      <button data-view="side">Lado</button>
+      <button data-view="top">Arriba</button>
+      <button data-view="low">Contrapicado</button>
+      <button data-view="high">Picado</button>
+      <button data-view="worm" class="wide">A ras de piso (vista de hormiga)</button>
+      <button data-view="eye" class="wide">A la altura de los ojos de la figura</button>
+    </div>
+    <div class="field">
+      <label for="lens">Lente <output id="lens-out" for="lens">35 mm</output></label>
+      <input type="range" id="lens" min="14" max="200" step="1" value="35">
+      <div class="scale"><span>14 gran angular</span><span>50 normal</span><span>200 tele</span></div>
+    </div>
+    <div class="toggles">
+      <label class="toggle"><span>Línea de horizonte<small>Siempre a la altura del ojo de la cámara</small></span><input type="checkbox" id="t-horizon" checked></label>
+    </div>
+  </section>
+
+  <section role="tabpanel" id="p-luz" aria-labelledby="tab-luz">
+    <h2>Luz</h2>
+    <div class="soon">
+      <span class="when">Entrega 6</span>
+      <p>Hasta cuatro luces, el preset “Lámpara noir”, sombras duras o suaves y la vista de valores en 2, 3 o 5 tonos.</p>
+    </div>
+  </section>
+</aside>
+
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+const H = 1.75, HEAD = H / 7.5;
+const PAPER = 0xf1f0ec, BLUE = 0x7cc0ea, BLUE_DEEP = 0x3e7fb0;
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const coarse = matchMedia("(pointer: coarse)").matches;
+
+const viewport = document.getElementById("viewport");
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+viewport.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(PAPER);
+scene.fog = new THREE.Fog(PAPER, 14, 42);
+
+const camera = new THREE.PerspectiveCamera(40, 1, 0.05, 200);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 0.4;
+controls.maxDistance = 25;
+// La cámara puede bajar por debajo del objetivo para mirar hacia arriba (contrapicado);
+// lo único que no puede es atravesar el piso: se detiene a 3 cm de él.
+controls.maxPolarAngle = Math.PI * 0.96;
+const FLOOR_EYE = 0.03;
+function keepAboveFloor() {
+  if (camera.position.y < FLOOR_EYE) camera.position.y = FLOOR_EYE;
+}
+controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+
+// Luz neutra de estudio (la luz dramática llega en la entrega 6)
+scene.add(new THREE.HemisphereLight(0xffffff, 0xd9d5cd, 1.1));
+const sun = new THREE.DirectionalLight(0xffffff, 1.7);
+sun.position.set(3, 6, 4);
+sun.castShadow = true;
+sun.shadow.mapSize.set(coarse ? 1024 : 2048, coarse ? 1024 : 2048);
+Object.assign(sun.shadow.camera, { left: -3, right: 3, top: 3, bottom: -3, near: 1, far: 15 });
+sun.shadow.bias = -0.0005;
+sun.shadow.radius = 4;
+scene.add(sun);
+
+// Piso de papel y grilla azul no-foto
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), new THREE.MeshStandardMaterial({ color: PAPER, roughness: 1 }));
+floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
+scene.add(floor);
+
+const grid = new THREE.Group();
+const minor = new THREE.GridHelper(10, 100, BLUE, BLUE);
+minor.material.transparent = true; minor.material.opacity = 0.28;
+const major = new THREE.GridHelper(20, 20, BLUE_DEEP, BLUE);
+major.material.transparent = true; major.material.opacity = 0.7;
+minor.position.y = 0.001; major.position.y = 0.002;
+grid.add(minor, major);
+scene.add(grid);
+
+// Figura de referencia: maniquí segmentado a 7.5 cabezas (estática en esta entrega)
+const clay = new THREE.MeshStandardMaterial({ color: 0xbdb6ac, roughness: 0.85 });
+const jointMat = new THREE.MeshStandardMaterial({ color: 0x8a837a, roughness: 0.7 });
+const figure = new THREE.Group();
+const UP = new THREE.Vector3(0, 1, 0);
+const v = (x, y, z = 0) => new THREE.Vector3(x, y, z);
+
+function addMesh(geo, mat, pos, scale) {
+  const m = new THREE.Mesh(geo, mat);
+  m.position.copy(pos);
+  if (scale) m.scale.set(...scale);
+  m.castShadow = true; m.receiveShadow = true;
+  figure.add(m);
+  return m;
+}
+function limb(a, b, r) {
+  const dir = new THREE.Vector3().subVectors(b, a);
+  const len = dir.length();
+  const m = addMesh(new THREE.CapsuleGeometry(r, Math.max(len - r, 0.01), 6, 14), clay, a.clone().add(b).multiplyScalar(0.5));
+  m.quaternion.setFromUnitVectors(UP, dir.normalize());
+}
+function joint(p, r) { addMesh(new THREE.SphereGeometry(r, 18, 12), jointMat, p); }
+const ball = new THREE.SphereGeometry(1, 28, 18);
+
+// Cabeza, cuello y tronco
+addMesh(ball, clay, v(0, H - HEAD / 2, 0.005), [0.078, HEAD / 2, 0.096]);
+addMesh(new THREE.BoxGeometry(0.03, 0.03, 0.03), clay, v(0, H - HEAD * 0.55, 0.095)); // nariz: indica hacia dónde mira
+limb(v(0, 1.42), v(0, 1.53), 0.045);
+joint(v(0, 1.43), 0.05);
+addMesh(ball, clay, v(0, 1.29), [0.165, 0.16, 0.11]);
+addMesh(ball, clay, v(0, 1.1), [0.13, 0.1, 0.09]);
+addMesh(ball, clay, v(0, 0.96), [0.16, 0.11, 0.11]);
+joint(v(0, 1.19), 0.06);
+
+// Brazos
+for (const s of [-1, 1]) {
+  const a = THREE.MathUtils.degToRad(9);
+  const d = v(Math.sin(a) * s, -Math.cos(a), 0);
+  const sh = v(0.19 * s, 1.42), el = sh.clone().addScaledVector(d, 0.3);
+  const d2 = v(Math.sin(a * 0.6) * s, -Math.cos(a * 0.6), 0.12).normalize();
+  const wr = el.clone().addScaledVector(d2, 0.26);
+  joint(sh, 0.052); limb(sh, el, 0.042); joint(el, 0.04); limb(el, wr, 0.034); joint(wr, 0.03);
+  const hand = addMesh(ball, clay, wr.clone().addScaledVector(d2, 0.085), [0.04, 0.085, 0.022]);
+  hand.quaternion.setFromUnitVectors(UP, d2.clone().negate());
+}
+// Piernas
+for (const s of [-1, 1]) {
+  const hip = v(0.095 * s, 0.91), knee = v(0.1 * s, 0.5, 0.01), ankle = v(0.1 * s, 0.09, -0.01);
+  joint(hip, 0.065); limb(hip, knee, 0.068); joint(knee, 0.055); limb(knee, ankle, 0.048); joint(ankle, 0.04);
+  addMesh(new THREE.BoxGeometry(0.09, 0.06, 0.25), clay, v(0.1 * s, 0.035, 0.06));
+}
+scene.add(figure);
+
+// Cubo de 50 cm
+const cube = new THREE.Group();
+const cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), clay);
+cubeMesh.castShadow = true; cubeMesh.receiveShadow = true;
+cube.add(cubeMesh, new THREE.LineSegments(new THREE.EdgesGeometry(cubeMesh.geometry), new THREE.LineBasicMaterial({ color: 0x4b4741 })));
+cube.position.set(0.8, 0.25, -0.35);
+scene.add(cube);
+
+// Regla de cabezas
+const heads = new THREE.Group();
+function label(text, w = 0.44) {
+  const c = document.createElement("canvas");
+  c.width = 512; c.height = 128;
+  const g = c.getContext("2d");
+  g.fillStyle = "#3e7fb0";
+  g.font = "500 64px 'JetBrains Mono', monospace";
+  g.textAlign = "right"; g.textBaseline = "middle";
+  g.fillText(text, 500, 64);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+  s.scale.set(w, w / 4, 1);
+  return s;
+}
+function buildHeads() {
+  const lineMat = new THREE.LineBasicMaterial({ color: BLUE_DEEP });
+  const x = -0.5, pts = [v(x, 0), v(x, H)];
+  for (let i = 0; i <= 7; i++) { const y = H - i * HEAD; pts.push(v(x - 0.04, y), v(x + 0.04, y)); }
+  pts.push(v(x - 0.04, 0.0005), v(x + 0.04, 0.0005));
+  heads.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), lineMat));
+  for (let i = 1; i <= 7; i++) {
+    const s = label(String(i)); s.position.set(x - 0.2, H - i * HEAD + HEAD / 2, 0); heads.add(s);
+  }
+  const half = label("½"); half.position.set(x - 0.2, HEAD * 0.25, 0); heads.add(half);
+  const top = label("175 cm", 0.5); top.position.set(x - 0.12, H + 0.08, 0); heads.add(top);
+}
+scene.add(heads);
+
+// Vistas
+const TARGET_BODY = v(0, 0.9);
+const VIEWS = {
+  persp: { pos: v(2.6, 1.6, 3.2), target: TARGET_BODY },
+  front: { pos: v(0, 1.0, 4.4), target: TARGET_BODY },
+  side:  { pos: v(4.4, 1.0, 0), target: TARGET_BODY },
+  top:   { pos: v(0.01, 5.6, 0.01), target: v(0, 0, 0) },
+  low:   { pos: v(0.9, 0.2, 1.9), target: v(0, 1.35) },
+  worm:  { pos: v(0.35, FLOOR_EYE + 0.02, 1.3), target: v(0, 1.5) },
+  high:  { pos: v(1.6, 3.4, 2.4), target: v(0, 0.6) },
+  eye:   { pos: v(0, H - HEAD * 0.45, 2.8), target: v(0, H - HEAD * 0.45) },
+};
+let tween = null;
+function goTo(name) {
+  const vw = VIEWS[name]; if (!vw) return;
+  if (reduceMotion) { camera.position.copy(vw.pos); controls.target.copy(vw.target); return; }
+  tween = { t0: performance.now(), dur: 520, fromP: camera.position.clone(), fromT: controls.target.clone(), toP: vw.pos.clone(), toT: vw.target.clone() };
+}
+function stepTween(now) {
+  if (!tween) return;
+  const k = Math.min(1, (now - tween.t0) / tween.dur), e = 1 - Math.pow(1 - k, 3);
+  camera.position.lerpVectors(tween.fromP, tween.toP, e);
+  controls.target.lerpVectors(tween.fromT, tween.toT, e);
+  if (k === 1) tween = null;
+}
+controls.addEventListener("start", () => { tween = null; });
+
+// Lente: milímetros equivalentes a cámara de 35 mm (sensor de 24 mm de alto)
+const lens = document.getElementById("lens"), lensOut = document.getElementById("lens-out");
+function setLens(mm) {
+  camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(12 / mm));
+  camera.updateProjectionMatrix();
+  lensOut.textContent = mm + " mm";
+  document.getElementById("r-lens").textContent = mm + " mm";
+  document.getElementById("hud-lens").textContent = mm + " mm";
+}
+lens.addEventListener("input", () => setLens(+lens.value));
+
+// Interruptores
+const bind = (id, obj) => document.getElementById(id).addEventListener("change", e => { obj.visible = e.target.checked; });
+bind("t-figure", figure); bind("t-cube", cube); bind("t-grid", grid); bind("t-heads", heads);
+const horizon = document.getElementById("horizon");
+const tHorizon = document.getElementById("t-horizon");
+
+// Pestañas: en teléfono abren una hoja; en escritorio, el panel siempre está visible
+const desktop = matchMedia("(min-width: 900px)");
+const tabs = [...document.querySelectorAll('[role="tab"]')];
+let activeTab = "tab-camara";
+function selectTab(id, fromUser = true) {
+  const same = id === activeTab;
+  activeTab = id;
+  for (const t of tabs) {
+    const on = t.id === id;
+    t.setAttribute("aria-selected", String(on));
+    document.getElementById(t.getAttribute("aria-controls")).classList.toggle("active", on);
+  }
+  if (!desktop.matches && fromUser) document.body.classList.toggle("sheet-open", !(same && document.body.classList.contains("sheet-open")));
+}
+tabs.forEach(t => t.addEventListener("click", () => selectTab(t.id)));
+renderer.domElement.addEventListener("pointerdown", () => { if (!desktop.matches) document.body.classList.remove("sheet-open"); });
+document.querySelectorAll("[data-view]").forEach(b => b.addEventListener("click", () => goTo(b.dataset.view)));
+
+document.getElementById("hint").textContent = coarse
+  ? "Un dedo: girar · Dos dedos: acercar y desplazar"
+  : "Arrastrar: girar · Clic derecho: desplazar · Rueda: acercar";
+
+// Lecturas y horizonte
+const rEye = document.getElementById("r-eye"), rDist = document.getElementById("r-dist"), hudEye = document.getElementById("hud-eye");
+const hLabel = document.getElementById("horizon-label");
+const fwd = new THREE.Vector3(), far = new THREE.Vector3();
+let lastEye = null, lastDist = null;
+function updateReadouts() {
+  const eye = Math.round(camera.position.y * 100);
+  const dist = camera.position.distanceTo(controls.target).toFixed(1);
+  if (eye !== lastEye) { rEye.textContent = eye + " cm"; hudEye.textContent = "Ojo " + eye + " cm"; hLabel.textContent = "Horizonte · ojo a " + eye + " cm"; lastEye = eye; }
+  if (dist !== lastDist) { rDist.textContent = dist + " m"; lastDist = dist; }
+  fwd.subVectors(controls.target, camera.position); fwd.y = 0;
+  if (!tHorizon.checked || fwd.lengthSq() < 1e-6) { horizon.hidden = true; return; }
+  fwd.normalize();
+  far.copy(camera.position).addScaledVector(fwd, 1000); far.y = camera.position.y;
+  far.project(camera);
+  const y = (1 - (far.y + 1) / 2) * viewport.clientHeight;
+  horizon.hidden = !(y > 0 && y < viewport.clientHeight);
+  horizon.style.top = y + "px";
+}
+
+function resize() {
+  const w = viewport.clientWidth, h = viewport.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(viewport);
+desktop.addEventListener("change", () => document.body.classList.remove("sheet-open"));
+
+// Conservar la vista al actualizar la página
+window.claude?.hot?.snapshot?.(() => ({
+  pos: camera.position.toArray(), target: controls.target.toArray(), mm: +lens.value, tab: activeTab,
+}));
+function start(data = {}) {
+  const vw = VIEWS.persp;
+  camera.position.fromArray(data.pos ?? vw.pos.toArray());
+  controls.target.fromArray(data.target ?? vw.target.toArray());
+  lens.value = data.mm ?? 35; setLens(+lens.value);
+  selectTab(data.tab ?? "tab-camara", false);
+  resize();
+  renderer.setAnimationLoop(now => { stepTween(now); controls.update(); keepAboveFloor(); renderer.render(scene, camera); updateReadouts(); });
+}
+document.fonts.ready.then(buildHeads);
+window.claude?.hot?.ready ? window.claude.hot.ready(start) : start(window.claude?.hot?.data ?? {});
+</script>
+<script>
+  // Si el módulo 3D no carga (sin conexión al CDN), mostrar un mensaje claro
+  setTimeout(() => { if (!document.querySelector("#viewport canvas")) document.getElementById("error").style.display = "grid"; }, 8000);
+</script>
+</body>
+</html>
