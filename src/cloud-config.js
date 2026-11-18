@@ -4,5 +4,5 @@
 // la seguridad la dan las reglas RLS del esquema.
 export const CLOUD = {
   url: "https://nokiuqisqrbvdxdotkkk.supabase.co",
-  anonKey: "",
+  anonKey: "sb_publishable_hWsKtqLmKf-OY1teRmruYQ_GkCKY-VB",
 };

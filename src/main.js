@@ -1019,7 +1019,7 @@ const faceSlider = (key, label, val, min, max, step) => {
   <input type="range" id="${id}" data-act="face" data-key="${key}" min="${min}" max="${max}" step="${step}" value="${val}"></div>`;
 };
 function savedExpr() { try { return JSON.parse(localStorage.getItem("arnes-expr") || "[]"); } catch { return []; } }
-function writeExpr(a) { try { localStorage.setItem("arnes-expr", JSON.stringify(a)); } catch { toast("Este navegador no permite guardar expresiones aquí."); } }
+function writeExpr(a) { try { localStorage.setItem("arnes-expr", JSON.stringify(a)); } catch { toast("Este navegador no permite guardar expresiones aquí."); } syncProfile(); }
 function setFace(o) {
   const fig = figs.get(o.id);
   o.pose.rot.jaw = [o.face.expr.jaw || 0, 0, 0];
@@ -1329,7 +1329,24 @@ function applyPreset(k) {
 
 // Poses guardadas en el dispositivo
 function savedPoses() { try { return JSON.parse(localStorage.getItem("arnes-poses") || "[]"); } catch { return []; } }
-function writePoses(a) { try { localStorage.setItem("arnes-poses", JSON.stringify(a)); } catch { toast("Este navegador no permite guardar poses aquí."); } }
+function writePoses(a) { try { localStorage.setItem("arnes-poses", JSON.stringify(a)); } catch { toast("Este navegador no permite guardar poses aquí."); } syncProfile(); }
+// Perfil en la nube: expresiones y poses propias. Al entrar se juntan las del dispositivo con las de la cuenta.
+let profTimer = 0;
+function syncProfile() {
+  if (!cloud.user()) return;
+  clearTimeout(profTimer);
+  profTimer = setTimeout(() => cloud.pushProfile({ expr: savedExpr(), poses: savedPoses() }).catch(() => {}), 1500);
+}
+async function mergeProfile() {
+  if (!cloud.user()) return;
+  try {
+    const d = await cloud.pullProfile() || {};
+    const union = (a, b) => { const m = new Map(); for (const x of [...(b || []), ...(a || [])]) m.set(x.name || x.label || JSON.stringify(x), x); return [...m.values()]; };
+    localStorage.setItem("arnes-expr", JSON.stringify(union(savedExpr(), d.expr)));
+    localStorage.setItem("arnes-poses", JSON.stringify(union(savedPoses(), d.poses)));
+    await cloud.pushProfile({ expr: savedExpr(), poses: savedPoses() });
+  } catch {}
+}
 function savePose(name, o) {
   const k = 1.75 / figs.get(o.id).d.H;
   const all = savedPoses();
@@ -1628,7 +1645,9 @@ const home = createHome({
   onOpen: p => { if (p) openProject(p); else if (store.project) markDirty(3); },
   makeExample: () => buildExample(),
   makeBlank: blankProject,
+  onLogin: () => mergeProfile(),
 });
+mergeProfile();
 window.__arnes.home = home;
 $("#pchip").addEventListener("click", async () => { if (store.project) { storeCamera(); clearTimeout(store.saveTimer); await store.saveNow(); } home.show(); });
 await document.fonts?.ready;

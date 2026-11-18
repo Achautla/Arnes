@@ -2,11 +2,11 @@
 import * as cloud from "./cloud.js";
 import { escapeHtml as esc, uid } from "./util.js";
 
-export function createHome({ store, onOpen, makeExample, makeBlank }) {
+export function createHome({ store, onOpen, makeExample, makeBlank, onLogin }) {
   const el = document.createElement("div");
   el.id = "home"; el.hidden = true; el.setAttribute("role", "dialog"); el.setAttribute("aria-label", "Mis proyectos");
   document.body.appendChild(el);
-  let screen = "projects", busy = false, msg = "", confirmDel = null, remote = [];
+  let screen = "projects", busy = false, msg = "", confirmDel = null, remote = [], lastEmail = "";
   const skipped = () => sessionStorage.getItem("arnes-offline") === "1";
 
   async function show() {
@@ -30,7 +30,7 @@ export function createHome({ store, onOpen, makeExample, makeBlank }) {
         <h2>Entra para guardar en la nube</h2>
         <p class="sub">Tus proyectos se sincronizan entre teléfono, tableta y computadora.</p>
         <form id="h-login" class="hform">
-          <label class="fld"><span>Correo</span><input type="email" id="h-email" autocomplete="email" required></label>
+          <label class="fld"><span>Correo</span><input type="email" id="h-email" autocomplete="email" required value="${esc(lastEmail)}"></label>
           <label class="fld"><span>Contraseña</span><input type="password" id="h-pw" autocomplete="current-password" minlength="6" required></label>
           <p class="hmsg" role="status">${esc(msg)}</p>
           <div class="row"><button class="btn accent" type="submit" data-h="in" ${busy ? "disabled" : ""}>Entrar</button><button class="btn" type="button" data-h="up" ${busy ? "disabled" : ""}>Crear cuenta</button></div>
@@ -46,11 +46,11 @@ export function createHome({ store, onOpen, makeExample, makeBlank }) {
     const cur = store.project?.id;
     el.innerHTML = `<div class="home-in">${head}
       <div class="home-bar"><h2>Mis proyectos</h2>
-        <span class="acct">${cloud.configured() ? (u ? `${esc(u.email)} · <button class="linkbtn" data-h="out">Salir</button>` : `<button class="linkbtn" data-h="login">Entrar a la nube</button>`) : `<small>Guardado en este dispositivo</small>`}</span></div>
+        <span class="acct">${cloud.configured() ? (u ? `${esc(u.email)} · <button class="linkbtn" data-h="out">Salir</button>` : `<button class="linkbtn" data-h="login">Entrar a la nube</button>`) : `<small>Guardado en este dispositivo${cloud.reachable() ? "" : " · la nube funciona en la versión de GitHub Pages"}</small>`}</span></div>
       <div class="row"><button class="btn accent" data-h="new">Nuevo proyecto</button><button class="btn" data-h="example">Abrir el ejemplo</button>${cur ? `<button class="btn" data-h="back">Volver al que tenía abierto</button>` : ""}</div>
       <p class="hmsg" role="status">${esc(msg)}</p>
       <ul class="plist">${list.map(e => `<li class="pcard${e.id === cur ? " cur" : ""}">
-        <button class="pmain" data-h="open" data-id="${e.id}"><strong>${esc(e.name)}</strong><small>${e.vinetas} viñeta${e.vinetas === 1 ? "" : "s"}${e.pages ? ` · ${e.pages} página${e.pages === 1 ? "" : "s"}` : ""} · ${when(e.updated)}</small></button>
+        <button class="pmain" data-h="open" data-id="${e.id}"><strong>${esc(e.name)}</strong><small>${e.vinetas} viñeta${e.vinetas === 1 ? "" : "s"}${e.pages ? ` · ${e.pages} página${e.pages === 1 ? "" : "s"}` : ""} · ${when(e.updated)}${(() => { const r = remote.find(x => x.id === e.id); return !u ? "" : !r ? " · solo en este dispositivo" : Date.parse(r.updated_at) > e.updated + 2000 ? " · hay una versión más nueva en la nube" : " · en la nube"; })()}</small></button>
         ${confirmDel === e.id
           ? `<span class="pconf">¿Borrar «${esc(e.name)}»? <button class="btn danger" data-h="del-yes" data-id="${e.id}">Borrar «${esc(e.name)}»</button><button class="btn" data-h="del-no">Conservar</button></span>`
           : `<span class="pacts"><button class="btn" data-h="rename" data-id="${e.id}">Renombrar</button><button class="btn" data-h="dup" data-id="${e.id}">Duplicar</button><button class="btn" data-h="del" data-id="${e.id}">Borrar</button></span>`}
@@ -69,12 +69,13 @@ export function createHome({ store, onOpen, makeExample, makeBlank }) {
     try {
       if (a === "in" || a === "up") {
         const email = el.querySelector("#h-email").value.trim(), pw = el.querySelector("#h-pw").value;
+        lastEmail = email; // si algo falla, el correo no se borra
         if (!email || pw.length < 6) { msg = "Escribe tu correo y una contraseña de al menos 6 caracteres."; return draw(); }
         busy = true; draw();
         const u = a === "in" ? await cloud.signIn(email, pw) : await cloud.signUp(email, pw);
         busy = false;
         if (!u) { msg = "Te enviamos un correo para confirmar la cuenta. Ábrelo y luego entra aquí."; return draw(); }
-        screen = "projects"; return draw();
+        screen = "projects"; onLogin?.(); return draw();
       }
       if (a === "offline") { sessionStorage.setItem("arnes-offline", "1"); screen = "projects"; return draw(); }
       if (a === "login") { screen = "login"; return draw(); }
@@ -82,7 +83,16 @@ export function createHome({ store, onOpen, makeExample, makeBlank }) {
       if (a === "back") return open(null);
       if (a === "new") return open(makeBlank());
       if (a === "example") return open(makeExample());
-      if (a === "open") return open(id === store.project?.id ? null : await store.readProject(id));
+      if (a === "open") {
+        if (id === store.project?.id) return open(null);
+        let p = await store.readProject(id);
+        const r = remote.find(x => x.id === id), local = (await store.list()).find(e => e.id === id);
+        if (r && local && Date.parse(r.updated_at) > local.updated + 2000) {
+          const newer = await cloud.pull(id).catch(() => null);
+          if (newer) { p = newer; await store.writeProject(p); }
+        }
+        return open(p);
+      }
       if (a === "pull") { const p = await cloud.pull(id); if (p) { await store.writeProject(p); return open(p); } }
       if (a === "dup") {
         const p = await store.readProject(id); p.id = uid("p"); p.name = p.name + " (copia)"; delete p.cloud;

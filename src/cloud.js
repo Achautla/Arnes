@@ -3,7 +3,9 @@ import { CLOUD } from "./cloud-config.js";
 
 const KEY = "arnes-session";
 const base = () => CLOUD.url.replace(/\/$/, "");
-export const configured = () => !!(CLOUD.url && CLOUD.anonKey);
+// Dentro de claude.ai la app no puede hablar con otros servidores: la nube solo vive en GitHub Pages (y en pruebas locales)
+export const reachable = () => /github\.io$|^localhost$|^127\.0\.0\.1$/.test(location.hostname);
+export const configured = () => !!(CLOUD.url && CLOUD.anonKey) && reachable();
 
 let session = null;
 try { session = JSON.parse(localStorage.getItem(KEY) || "null"); } catch {}
@@ -57,3 +59,10 @@ export function push(p) {
   });
 }
 export const removeRemote = id => rest(`projects?id=eq.${encodeURIComponent(id)}`, { method: "DELETE" });
+
+// Perfil: expresiones y poses guardadas viajan con la cuenta
+export async function pullProfile() { const r = await rest("profiles?select=data"); return r?.[0]?.data || null; }
+export const pushProfile = data => rest("profiles?on_conflict=user_id", {
+  method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+  body: JSON.stringify({ user_id: user().id, data, updated_at: new Date().toISOString() }),
+});

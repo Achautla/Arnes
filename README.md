@@ -72,11 +72,8 @@ Para probarla en tu computadora sin publicar: `python -m http.server` en esta ca
 
 Motor 3D: Three.js 0.160.0 (jsDelivr). PDF: jsPDF 2.5.1 (cdnjs). PSD: ag-psd 34.1.0 (jsDelivr).
 
-### Activar la nube
-1. Crea un proyecto en Supabase (en tu organización personal).
-2. En el editor SQL, corre `supabase/schema.sql`.
-3. En *Authentication → Providers*, deja activo «Email».
-4. Pega la URL del proyecto y la clave publicable (anon) en `src/cloud-config.js` y sube el cambio.
+### Nube (activa)
+Proyecto de Supabase «Arnes» (`nokiuqisqrbvdxdotkkk`): tablas `projects` y `profiles` con RLS (cada cuenta solo ve lo suyo). Funciona en GitHub Pages; dentro de claude.ai la app sigue guardando solo en el dispositivo. Cuentas con correo y contraseña; las expresiones y poses guardadas viajan con la cuenta.
 
 ## Documento del proyecto
 
