@@ -2,6 +2,16 @@
 
 Storyboard 3D para cómic: posar personajes, colocar cámaras y luces, y obtener un semirender (volumen, sombras y valores) para dibujar a lápiz.
 
+## Fase 3 · bloque 1 (ropa y pliegues) — publicado
+
+- **Ropa** (Escena → personaje → Ropa): camisa, pantalón, saco, gabardina, vestido, falda y capa; vestuarios rápidos (detective noir, traje, casual, vestido, capa).
+- Cada prenda: color, tela (rígida, media, suelta), holgura, largo, manga, cuello (normal, alzado, sin cuello), cinturón y orden de capas. «Copiar ropa a los demás personajes».
+- Las partes ceñidas siguen a los huesos; faldones, faldas, vestidos y capas se simulan como tela con choque contra el cuerpo y el piso. La tela se acomoda sola al soltar la pose.
+- **Pliegues**: crestas donde la tela se comprime y en el lado de adentro de codos, rodillas, ingle y cintura; pliegues de caída en la tela colgada.
+- **Mapa de la tela** (azul comprime, rojo estira) y **tipos de pliegue** (tubo, zigzag, espiral, medio cierre, caída, inerte) en Escena → Visor.
+- **Viento** (Luz → Fondo y atmósfera) para capas y faldones. **Calidad de la tela** baja, media o alta (en teléfono arranca en media).
+- El maniquí se oculta bajo la ropa para que ninguna articulación asome.
+
 ## Fase 2 · bloque 2 (página, estilos, escenarios y nube) — publicado
 
 - **Inicio**: entrar a la nube (cuando se active) → mis proyectos (nuevo, ejemplo, renombrar, duplicar, borrar) → área de diseño. El botón «Proyectos» de la cabecera vuelve a la lista.
@@ -47,6 +57,7 @@ Para probarla en tu computadora sin publicar: `python -m http.server` en esta ca
 - `src/mannequin.js`: maniquí segmentado, límites, IK, manos, mirada, centro de masa.
 - `src/poses.js`, `src/props.js`, `src/props2.js`, `src/lights.js`: biblioteca de poses, utilería, terreno, luces, presets y gobos.
 - `src/scenarios.js`: escenarios armados. `src/scenes.js`: escenas fuera del visor (miniaturas de página y exportación).
+- `src/cloth.js`: ropa, simulación de tela, pliegues y clasificación de pliegues.
 - `src/page.js`: editor de página. `src/home.js`: inicio y mis proyectos. `src/cloud.js`, `src/cloud-config.js`: nube (Supabase por REST).
 - `src/render.js`: semirender (valores, contorno, líneas azules) y exportación a imagen.
 - `src/store.js`: proyecto, deshacer y guardado sin conexión. `src/example.js`: proyecto de ejemplo.

@@ -14,6 +14,7 @@ import { createPageEditor, styleView, FORMATS } from "./page.js";
 import { Store, ASPECTS, newVineta, defaultView, defaultCamera } from "./store.js";
 import { buildExample } from "./example.js";
 import { createHome } from "./home.js";
+import { dress, GARMENTS, MATERIALS, FOLD_TYPES, newGarment } from "./cloth.js";
 import * as cloud from "./cloud.js";
 
 const PAPER = 0xf1f0ec, DARK = 0x111214, BLUE = 0x7cc0ea, BLUE_DEEP = 0x3e7fb0;
@@ -115,6 +116,7 @@ function buildObject(o) {
     figs.set(o.id, fig);
     g = fig.root;
     g.position.fromArray(o.pos); g.rotation.set(0, (o.rotY || 0) * DEG, 0);
+    if (o.clothes?.length) dressFig(o, fig);
   } else {
     g = buildProp(o.type, o.params);
     g.position.fromArray(o.pos);
@@ -129,6 +131,21 @@ function buildObject(o) {
   world.set(o.id, g); content.add(g);
   return g;
 }
+function dressFig(o, fig) {
+  const v = store.v.view;
+  fig.root.updateMatrixWorld(true);
+  fig.dress?.dispose();
+  fig.dress = o.clothes?.length ? dress(fig, o.clothes, { quality: v.clothQ, useColor: v.mode !== "clay", map: !!v.tension, wind: v.wind || 0, windDir: v.windDir || 0 }) : null;
+  fig.root.traverse(c => { c.userData.objId = o.id; });
+}
+const defaultClothQ = matchMedia("(pointer: coarse)").matches || (navigator.hardwareConcurrency || 8) <= 4 ? "media" : "alta";
+const OUTFITS = {
+  noir: { label: "Detective noir", items: ["pantalon", "camisa", "gabardina"] },
+  formal: { label: "Traje", items: ["pantalon", "camisa", "saco"] },
+  casual: { label: "Camisa y pantalón", items: ["pantalon", "camisa"] },
+  vestido: { label: "Vestido", items: ["vestido"] },
+  heroe: { label: "Capa", items: ["pantalon", "camisa", "capa"] },
+};
 function rebuildObject(o) {
   const old = world.get(o.id);
   if (old) { content.remove(old); disposeTree(old); }
@@ -161,6 +178,7 @@ function applyBackground() {
 }
 function repaintAll() {
   const useColor = store.v.view.mode !== "clay";
+  for (const f of figs.values()) f.dress?.setStyle({ color: useColor, map: !!store.v.view.tension });
   for (const o of store.v.objects) { const g = world.get(o.id); if (g) paint(g, o.color || null, useColor); }
 }
 // Formas básicas: cajas de construcción sobre cada parte del cuerpo (ayuda para dibujar)
@@ -451,7 +469,8 @@ function pick(e) {
   const hit = hits.find(h => h.object.visible && h.object.userData.objId);
   if (!hit) { select(null); return; }
   const id = hit.object.userData.objId, o = findObj(id);
-  const joint = o?.kind === "figure" && ui.tab === "pose" ? hit.object.userData.joint || null : null;
+  const ud = hit.object.userData;
+  const joint = o?.kind === "figure" && ui.tab === "pose" ? (ud.jointAt ? ud.jointAt(hit.face?.a ?? 0) : ud.joint) || null : null;
   select(id, joint);
 }
 
@@ -491,6 +510,17 @@ function drawGuides() {
       const inside = p.x > 0 && p.x < W && p.y > 0 && p.y < H;
       out += `<line x1="${cx}" y1="${cy}" x2="${p.x}" y2="${p.y}" class="vpl"/>`;
       if (inside) out += `<circle cx="${p.x}" cy="${p.y}" r="7" class="vp"/><text x="${p.x + 11}" y="${p.y - 9}" class="vpt">PF ${k === "V" ? "vertical" : k}</text>`;
+    }
+  }
+  if (v.folds) {
+    const seen = [];
+    for (const f of figs.values()) for (const L of f.dress?.labels() || []) {
+      const q = L.at.clone().project(camera); if (q.z > 1 || Math.abs(q.x) > 1.05 || Math.abs(q.y) > 1.05) continue;
+      let x = (q.x + 1) / 2 * W, y = (1 - (q.y + 1) / 2) * H;
+      while (seen.some(([a, b]) => Math.abs(a - x) < 70 && Math.abs(b - y) < 22)) y += 24;
+      seen.push([x, y]);
+      const t = FOLD_TYPES[L.type], w = t.length * 7.4 + 16;
+      out += `<g class="fold"><circle cx="${x}" cy="${y}" r="3.5"/><rect x="${x + 7}" y="${y - 11}" width="${w}" height="21" rx="10"/><text x="${x + 15}" y="${y + 4}">${t}</text></g>`;
     }
   }
   svg.innerHTML = out;
@@ -582,6 +612,7 @@ renderer.setAnimationLoop(now => {
   const roll = store.v?.camera.roll || 0;
   if (roll) camera.rotateZ(roll * DEG);
   if (camera.position.y < 0.03) camera.position.y = 0.03;
+  for (const f of figs.values()) if (f.dress?.tick(now)) ui.dirty = Math.max(ui.dirty || 0, 1);
   if (!ui.dirty && !store.v.objects.some(o => o.gaze === "camera")) return;
   if (ui.dirty) ui.dirty--;
   updateHelpers();
@@ -788,7 +819,9 @@ function panelEscena() {
   const o = selObj();
   if (o) h += propsOf(o);
   h += `<h2>Visor</h2><div class="toggles">${toggle("grid", "Grilla", "Líneas cada 10 cm y cada 1 m", v.view.grid)}${toggle("ruler", "Regla de cabezas", "Junto al personaje seleccionado", v.view.ruler)}
-    ${toggle("floor", "Piso", "Apágalo para escenas en el aire o sobre terreno", v.view.floor !== false)}${toggle("forms", "Formas básicas", "Cajas de construcción sobre el cuerpo, para aprender a dibujarlo", !!v.view.forms)}</div>`;
+    ${toggle("floor", "Piso", "Apágalo para escenas en el aire o sobre terreno", v.view.floor !== false)}${toggle("forms", "Formas básicas", "Cajas de construcción sobre el cuerpo, para aprender a dibujarlo", !!v.view.forms)}
+    ${toggle("tension", "Mapa de la tela", "Azul donde se comprime (pliegues), rojo donde se estira", !!v.view.tension)}${toggle("folds", "Tipos de pliegue", "Etiqueta tubo, zigzag, espiral, medio cierre, caída o inerte", !!v.view.folds)}</div>
+    <h3>Calidad de la tela</h3><div class="pills">${[["baja", "Baja (rápida)"], ["media", "Media"], ["alta", "Alta"]].map(([k, l]) => pill(k, v.view.clothQ || defaultClothQ, l, "clothq")).join("")}</div>`;
   return h;
 }
 function propsOf(o) {
@@ -802,8 +835,32 @@ function propsOf(o) {
     if (pp.length) h += `<div class="nums">${pp.map(([k, val]) => num("param:" + k, k[0].toUpperCase() + k.slice(1), val, ["escalones", "pisos", "semilla"].includes(k) ? "" : "cm")).join("")}</div>`;
     h += `<div class="nums">${num("scale", "Escala", Math.round((o.scale?.[0] ?? 1) * 100), "%")}</div>`;
   }
-  h += `<div class="row colorrow"><label class="sel"><span>Color (para estilos de color y para separar planos)</span><input type="color" data-act="obj-color" value="${o.color || "#bdb6ac"}"></label>${o.color ? `<button class="btn" data-act="obj-nocolor">Quitar color</button>` : ""}</div>`;
+  if (isFig) h += clothesPanel(o);
+  h += `<div class="row colorrow"><label class="sel"><span>${isFig ? "Color de la piel o del maniquí" : "Color (para estilos de color y para separar planos)"}</span><input type="color" data-act="obj-color" value="${o.color || "#bdb6ac"}"></label>${o.color ? `<button class="btn" data-act="obj-nocolor">Quitar color</button>` : ""}</div>`;
   h += `<div class="row"><button class="btn" data-act="dup">Duplicar</button><button class="btn" data-act="fwd">Copiar a viñetas siguientes</button><button class="btn danger" data-act="del">Borrar</button></div></div>`;
+  return h;
+}
+
+function clothesPanel(o) {
+  const list = o.clothes || [];
+  let h = `<h3>Ropa</h3>`;
+  if (!list.length) h += `<p class="sub">Viste al personaje para ver cómo se dobla y cae la tela en cada pose.</p><div class="pills">${Object.entries(OUTFITS).map(([k, d]) => pill(k, "", d.label, "outfit")).join("")}</div>`;
+  h += `<div class="adds">${Object.entries(GARMENTS).map(([k, d]) => `<button class="btn" data-act="garment-add" data-val="${k}">+ ${d.label}</button>`).join("")}</div>`;
+  if (list.length) h += `<div class="olist">${list.map(g => `<button class="oitem${g.id === ui.garment ? " on" : ""}" data-act="garment-sel" data-val="${g.id}"><span><i class="swatch" style="background:${g.color}"></i>${GARMENTS[g.type].label}</span><small>${MATERIALS[g.mat].label.split(" (")[0]}</small></button>`).join("")}</div>`;
+  const g = list.find(x => x.id === ui.garment);
+  if (g) {
+    const def = GARMENTS[g.type];
+    h += `<div class="card sub-card">
+      <div class="row colorrow"><label class="sel"><span>Color de ${def.label.toLowerCase()}</span><input type="color" data-act="garment-color" value="${g.color}"></label></div>
+      <h3>Tela</h3><div class="pills">${Object.entries(MATERIALS).map(([k, m]) => pill(k, g.mat, m.label, "garment-mat")).join("")}</div>
+      ${slider("ease", "Holgura", g.ease ?? 1.2, 0.3, 5, 0.1, " cm", "garment")}
+      ${g.length !== undefined ? slider("length", g.type === "pantalon" ? "Largo (corto ↔ al tobillo)" : "Largo (cadera ↔ tobillo)", g.length, g.type === "pantalon" ? 0.3 : 0.15, 1, 0.01, "", "garment") : ""}
+      ${g.sleeve !== undefined ? slider("sleeve", "Manga (sin manga ↔ larga)", g.sleeve, 0, 1, 0.01, "", "garment") : ""}
+      ${g.collar !== undefined ? `<h3>Cuello</h3><div class="pills">${[["bajo", "Normal"], ["alzado", "Alzado"], ["no", "Sin cuello"]].map(([k, l]) => pill(k, g.collar, l, "garment-collar")).join("")}</div>` : ""}
+      ${g.belt !== undefined ? `<div class="toggles">${toggle("belt", "Cinturón", "", g.belt, "garment-t")}</div>` : ""}
+      <div class="row"><button class="btn" data-act="garment-up">Subir de capa</button><button class="btn danger" data-act="garment-del">Quitar ${def.label.toLowerCase()}</button></div></div>`;
+  }
+  if (list.length) h += `<div class="row"><button class="btn" data-act="garment-copy">Copiar ropa a los demás personajes</button></div>`;
   return h;
 }
 
@@ -973,7 +1030,9 @@ function panelLuz() {
   h += `<div class="toggles">${toggle("outline", "Contorno", "Silueta y bordes marcados", v.outline)}</div>`;
   if (v.outline) h += slider("thick", "Grosor del contorno", v.thick, 0.5, 4, 0.25, " px", "view-r");
   h += `<h3>Fondo y atmósfera</h3><div class="pills">${pill("papel", v.background, "Papel", "bg")}${pill("oscuro", v.background, "Oscuro", "bg")}</div>
-  ${slider("fog", "Niebla o humo (separa los planos)", v.fog || 0, 0, 1, 0.05, "", "fog")}`;
+  ${slider("fog", "Niebla o humo (separa los planos)", v.fog || 0, 0, 1, 0.05, "", "fog")}
+  <h3>Viento</h3><p class="sub">Mueve capas, faldones y faldas.</p>
+  ${slider("wind", "Fuerza", v.wind || 0, 0, 1, 0.05, "", "wind")}${slider("windDir", "Dirección", v.windDir || 0, -180, 180, 5, "°", "wind")}`;
   return h;
 }
 
@@ -1084,6 +1143,20 @@ panel.addEventListener("click", e => {
       applyBackground(); store.commit(); renderPanel(); markDirty(3); toast(`Escenario agregado: ${sc.label}.`); break;
     }
     case "import-glb": $("#glbfile").click(); break;
+    case "outfit": { o.clothes = OUTFITS[val].items.map(newGarment); ui.garment = o.clothes.at(-1).id; rebuildObject(o); store.commit(); renderPanel(); markDirty(3); toast("Vestido. Cambia la pose y la tela se acomoda sola al soltar."); break; }
+    case "garment-add": { o.clothes ??= []; const g = newGarment(val); o.clothes.push(g); ui.garment = g.id; rebuildObject(o); store.commit(); renderPanel(); markDirty(3); break; }
+    case "garment-sel": ui.garment = ui.garment === val ? null : val; renderPanel(); break;
+    case "garment-mat": case "garment-collar": {
+      const g = o.clothes.find(x => x.id === ui.garment); g[act === "garment-mat" ? "mat" : "collar"] = val;
+      rebuildObject(o); store.commit(); renderPanel(); markDirty(3); break;
+    }
+    case "garment-del": { o.clothes = o.clothes.filter(x => x.id !== ui.garment); ui.garment = null; rebuildObject(o); store.commit(); renderPanel(); markDirty(3); break; }
+    case "garment-up": { const i = o.clothes.findIndex(x => x.id === ui.garment); if (i < o.clothes.length - 1) { const [g] = o.clothes.splice(i, 1); o.clothes.splice(i + 1, 0, g); } rebuildObject(o); store.commit(); renderPanel(); markDirty(3); break; }
+    case "garment-copy": {
+      for (const f of v.objects) if (f.kind === "figure" && f !== o) { f.clothes = clone(o.clothes).map(g => ({ ...g, id: newGarment(g.type).id })); rebuildObject(f); }
+      store.commit(); markDirty(3); toast("Ropa copiada. Cambia los colores para distinguir a cada personaje."); break;
+    }
+    case "clothq": v.view.clothQ = val; rebuildScene(); store.commit(); renderPanel(); markDirty(3); break;
     case "terrain": { o.params.tipo = val; rebuildObject(o); applyBackground(); store.commit(); renderPanel(); markDirty(); break; }
     case "obj-nocolor": { delete o.color; paint(world.get(o.id), null); store.commit(); renderPanel(); markDirty(); break; }
     case "light-nocolor": { const l = selLight(); delete l.color; rebuildLights(); attachGizmo(); store.commit(); renderPanel(); markDirty(); break; }
@@ -1128,6 +1201,7 @@ panel.addEventListener("input", e => {
     markDirty();
   } else if (act === "view-r") { store.v.view[key] = val; markDirty(); }
   else if (act === "fog") { store.v.view.fog = val; applyBackground(); markDirty(); }
+  else if (act === "wind") { store.v.view[key] = val; }
   else if (act === "roll") { store.v.camera.roll = val; markDirty(); }
   else if (pageEd.onInput(act, key, val, el)) { /* página */ }
 });
@@ -1138,6 +1212,12 @@ panel.addEventListener("change", e => {
   const o = selObj(), v = store.v;
   if (pageEd.onChangeEl(act, el)) return;
   if (act === "obj-color") { o.color = el.value; paint(world.get(o.id), o.color, store.v.view.mode !== "clay"); if (store.v.view.mode === "clay") toast("El color se ve en los estilos Color, Cel, Noir, Manga y Valores."); store.commit(); renderPanel(); markDirty(); return; }
+  if (act === "garment-color" || act === "garment" || act === "garment-t") {
+    const g = o.clothes.find(x => x.id === ui.garment); if (!g) return;
+    if (act === "garment-color") g.color = el.value; else if (act === "garment") g[key] = +el.value; else g[key] = el.checked;
+    rebuildObject(o); store.commit(); if (act === "garment-color") renderPanel(); markDirty(3); return;
+  }
+  if (act === "wind") { for (const f of figs.values()) f.dress?.setWind(v.view.wind || 0, v.view.windDir || 0); store.commit(); markDirty(3); return; }
   if (act === "light-color") { const l = selLight(); l.color = el.value; rebuildLights(); attachGizmo(); store.commit(); renderPanel(); markDirty(); return; }
   if (["joint-rot", "param", "lens", "light", "view-r", "face", "fog", "roll"].includes(act)) {
     if (act === "joint-rot") o.pose = M.readPose(figs.get(o.id), o.pose);
@@ -1149,6 +1229,7 @@ panel.addEventListener("change", e => {
     if (key === "grid" || key === "floor") applyBackground();
     if (key === "ruler") buildRuler();
     if (key === "forms") rebuildScene();
+    if (key === "tension") repaintAll();
     store.commit(); markDirty(); return;
   }
   if (act === "ui") { if (key === "pin") ui.pinFeet = el.checked; return; }

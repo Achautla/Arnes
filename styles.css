@@ -236,3 +236,10 @@ body.home-open > header, body.home-open > nav, body.home-open > aside { visibili
 .pmain strong { font-size: 16px; font-weight: 600; }
 .pmain small { color: var(--muted); font-size: 13px; }
 .pacts, .pconf { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 14px; }
+
+/* Fase 3 · ropa */
+#guides .fold circle { fill: #e0a33a; stroke: #1b1b1b; stroke-width: 1; }
+#guides .fold rect { fill: rgba(27, 27, 27, 0.82); stroke: #e0a33a; stroke-width: 1; }
+#guides .fold text { fill: #f4efe6; font: 600 12.5px var(--body); }
+.swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 8px; vertical-align: -1px; border: 1px solid rgba(255,255,255,.25); }
+.sub-card { margin-top: 8px; background: var(--graphite); }
