@@ -87,6 +87,20 @@ controls.enableDamping = true; controls.dampingFactor = 0.08;
 controls.minDistance = 0.15; controls.maxDistance = 30;
 controls.maxPolarAngle = Math.PI * 0.96;
 controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+// Rueda propia: OrbitControls da el mismo salto por cada evento, y los ratones de giro fino o los
+// touchpads mandan decenas de eventos por muesca (medio giro = kilómetros). Aquí cuenta cuánto giró.
+let wheelEnd = 0;
+renderer.domElement.parentElement.addEventListener("wheel", e => {
+  if (e.target !== renderer.domElement || ui.through) return;
+  e.preventDefault(); e.stopPropagation();
+  const px = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1);
+  const f = Math.exp(clamp(px, -240, 240) * (e.ctrlKey ? 0.004 : 0.0012));
+  const off = camera.position.clone().sub(controls.target);
+  const dist = clamp(off.length() * f, controls.minDistance, controls.maxDistance);
+  camera.position.copy(controls.target).addScaledVector(off.normalize(), dist);
+  tween = null; markDirty();
+  clearTimeout(wheelEnd); wheelEnd = setTimeout(() => { storeCamera(); store.touch(); }, 250);
+}, { capture: true, passive: false });
 
 // ---------------------------------------------------------------- Estado
 const store = new Store();
@@ -252,6 +266,26 @@ function stepTween(now) {
   controls.target.lerpVectors(tween.fromT, tween.toT, e);
   markDirty();
   if (k === 1) { tween = null; storeCamera(); store.touch(); }
+}
+// Encuadrar: vuelve a mostrar lo seleccionado (o toda la escena) sin cambiar el lado desde donde se mira
+function frameView() {
+  const box = new THREE.Box3();
+  const sel = ui.sel && world.get(ui.sel);
+  if (sel) box.setFromObject(sel);
+  else {
+    // sin selección: primero los personajes (lo que se dibuja); si no hay, toda la escena
+    const people = store.v.objects.filter(o => o.kind === "figure").map(o => world.get(o.id)).filter(Boolean);
+    for (const g of people.length ? people : world.values()) if (!g.userData.hidesFloor) box.expandByObject(g);
+  }
+  if (box.isEmpty()) box.set(new THREE.Vector3(-1, 0, -1), new THREE.Vector3(1, 1.8, 1));
+  const c = box.getCenter(new THREE.Vector3()), r = Math.max(0.25, box.getSize(new THREE.Vector3()).length() / 2);
+  // cabe a lo alto y a lo ancho (en el teléfono vertical lo que manda es el ancho)
+  const half = Math.min(camera.fov * DEG / 2, Math.atan(Math.tan(camera.fov * DEG / 2) * Math.min(camera.aspect, frameAspect())));
+  const dist = clamp(r / Math.sin(half) * 1.08, controls.minDistance, controls.maxDistance);
+  const dir = camera.position.clone().sub(controls.target);
+  if (dir.lengthSq() < 1e-6 || !isFinite(dir.x)) dir.set(0.4, 0.3, 1);
+  dir.normalize(); if (dir.y < -0.2) dir.y = 0.15;
+  goTo(c.clone().addScaledVector(dir.normalize(), dist), c);
 }
 controls.addEventListener("start", () => { tween = null; });
 controls.addEventListener("change", () => markDirty());
@@ -604,6 +638,7 @@ function resize() {
 new ResizeObserver(resize).observe(viewport);
 
 let lastFrame = 0;
+let lastGazeKey = "";
 renderer.setAnimationLoop(now => {
   if (!store.project || ui.tab === "pagina") return;
   stepTween(now);
@@ -613,7 +648,11 @@ renderer.setAnimationLoop(now => {
   if (roll) camera.rotateZ(roll * DEG);
   if (camera.position.y < 0.03) camera.position.y = 0.03;
   for (const f of figs.values()) if (f.dress?.tick(now)) ui.dirty = Math.max(ui.dirty || 0, 1);
-  if (!ui.dirty && !store.v.objects.some(o => o.gaze === "camera")) return;
+  // La mirada "al lector" solo obliga a redibujar cuando la cámara se movió (antes redibujaba sin parar)
+  const camKey = camera.position.x.toFixed(4) + camera.position.y.toFixed(4) + camera.position.z.toFixed(4);
+  const gazeCam = camKey !== lastGazeKey && store.v.objects.some(o => o.gaze === "camera");
+  lastGazeKey = camKey;
+  if (!ui.dirty && !gazeCam) return;
   if (ui.dirty) ui.dirty--;
   updateHelpers();
   renderer.autoClear = true;
@@ -1335,8 +1374,11 @@ store.on(kind => {
   if (kind === "save-failed") $("#savestate").textContent = "Sin guardado automático aquí: exporta el proyecto";
 });
 addEventListener("keydown", e => {
-  if (e.target.matches("input, select, textarea")) return;
+  if (e.target.matches("input, select, textarea, [contenteditable]")) return;
+  // Con el inicio, el menú de exportar o la página abiertos, los atajos del visor no aplican
+  if (document.body.classList.contains("home-open") || $("#export").open || !store.project) return;
   const mod = e.ctrlKey || e.metaKey;
+  if (ui.tab === "pagina" && !mod) return;
   if (mod && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? store.redo() : store.undo(); }
   else if (mod && e.key.toLowerCase() === "y") { e.preventDefault(); store.redo(); }
   else if (e.key === "Delete" || e.key === "Backspace") { if (ui.sel) deleteSelected(); }
@@ -1344,6 +1386,7 @@ addEventListener("keydown", e => {
   else if (e.key === "r" || e.key === "e") { ui.tmode = "rotate"; attachGizmo(); renderToolbar(); markDirty(); }
   else if (e.key === "s") { ui.tmode = "scale"; attachGizmo(); renderToolbar(); markDirty(); }
   else if (e.key === "Escape") { if (ui.through) setThrough(false); else select(null); }
+  else if (e.key === "f" || e.key === "F" || e.key === ".") frameView();
 });
 
 // Exportación
@@ -1515,10 +1558,11 @@ function toast(msg) {
 }
 
 // Acceso para pruebas desde la consola
-window.__arnes = { pageEd, exportPsd, store, ui, select, setPose, figs, selectTab, applyShot, camera, controls, rebuildScene, renderPanel, markDirty, POSE_LIBRARY, addFigure, M, pinHere, setAnchor, groundFigure, migrate };
+$("#hud-frame").addEventListener("click", frameView);
+window.__arnes = { frameView, pageEd, exportPsd, store, ui, select, setPose, figs, selectTab, applyShot, camera, controls, rebuildScene, renderPanel, markDirty, POSE_LIBRARY, addFigure, M, pinHere, setAnchor, groundFigure, migrate };
 
 // ---------------------------------------------------------------- Arranque
-$("#hint").textContent = coarse ? "Un dedo: girar · Dos dedos: acercar y desplazar · Toca para elegir" : "Arrastrar: girar · Clic derecho: desplazar · Rueda: acercar · Clic: elegir";
+$("#hint").textContent = coarse ? "Un dedo: girar · Dos dedos: acercar y desplazar · Toca para elegir" : "Arrastrar: girar · Clic derecho: desplazar · Rueda: acercar · F: encuadrar · Clic: elegir";
 desktop.addEventListener("change", () => document.body.classList.remove("sheet-open"));
 window.claude?.hot?.snapshot?.(() => ({ project: store.project, tab: ui.tab }));
 
