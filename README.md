@@ -2,6 +2,16 @@
 
 Storyboard 3D para cómic: posar personajes, colocar cámaras y luces, y obtener un semirender (volumen, sombras y valores) para dibujar a lápiz.
 
+## Fase 2 · bloque 1 (movimiento) — publicado
+
+- **Esqueleto de 55 articulaciones**: clavículas que acompañan al brazo, columna de 4 segmentos, cuello de 2, mandíbula, antebrazo con giro visible, 15 articulaciones por mano y dedos del pie.
+- **Rotación anatómica**: cada articulación se dobla dentro de un cono y gira sobre su propio hueso, con límites de rangos reales. Deslizadores con nombres claros ("Adelante ↔ atrás", "Palma adentro ↔ afuera") y **anillos** para girar arrastrando en el visor.
+- **Cuerpo completo**: puntos para manos, pies, pelvis, pecho, cabeza, codos y rodillas. **Fijar** manos y pies, **anclar** una mano a otro personaje u objeto, **simetría en vivo**, espejo y **apoyar en el piso**.
+- **Manos**: 12 poses (abierta, relajada, puño, sujetar, señalar, apoyada, contar, pellizco, sostener lápiz, garra, pistola, vaso) y control dedo por dedo.
+- **Rostro**: guías de construcción o rostro detallado, 8 expresiones y expresiones propias.
+- **24 poses**: las 12 base más 12 poses de prueba tomadas de "The Elder's Apprentice".
+- Los proyectos de la Fase 1 se convierten solos al esqueleto nuevo.
+
 ## Fase 1 (completa)
 
 - **Viñetas como cuartos 3D**: cada viñeta guarda su escena, sus luces y su cámara. Se duplica completa para armar la siguiente, y cualquier objeto o luz se puede copiar a las viñetas siguientes.

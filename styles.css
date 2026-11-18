@@ -157,3 +157,8 @@ dialog::backdrop { background: rgba(10, 11, 12, 0.6); }
   .grabber { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { aside#panel { transition: none; } }
+
+/* Fase 2: controles de pose */
+.btn.on { border-color: var(--blue); color: var(--blue); background: rgba(124, 192, 234, 0.1); }
+.k-end { color: #4ea6ec; } .k-core { color: #b28ae8; } .k-pole { color: #eb9a55; }
+optgroup { color: var(--muted); }

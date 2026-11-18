@@ -6,20 +6,21 @@ import { presetNoir } from "./lights.js";
 import { newVineta } from "./store.js";
 import { clone, DEG, round } from "./util.js";
 
-function seated(id, name, params, pos, rotY, wristTargets, extraRot = {}) {
+function seated(id, name, params, pos, rotY, wristTargets, extraRot = {}, hands = ["apoyada", "relajada"]) {
   const fig = M.buildFigure(params);
   fig.root.position.fromArray(pos);
   fig.root.rotation.y = rotY * DEG;
   const s = fig.d.H / 1.75;
   const pose = M.emptyPose();
   for (const [j, r] of Object.entries(POSE_LIBRARY.sentado.pose.rot)) pose.rot[j] = r.slice();
-  for (const [j, r] of Object.entries(extraRot)) pose.rot[j] = r.slice();
+  for (const [j, r] of Object.entries(M.fromV1(extraRot))) pose.rot[j] = r.slice();
+  Object.assign(pose.rot, M.handPoseRot(hands[0], "L"), M.handPoseRot(hands[1], "R"));
   pose.hips = POSE_LIBRARY.sentado.pose.hips.map(v => v * s);
   M.applyPose(fig, pose);
   for (const [end, t] of Object.entries(wristTargets)) M.solveIK(fig, end, new THREE.Vector3(...t), false, 30);
   return {
-    id, kind: "figure", name, pos, rotY, params, pose: M.readPose(fig),
-    hands: { L: "apoyada", R: "relajada" }, gaze: null, relaxed: false,
+    id, kind: "figure", name, pos, rotY, params, pose: M.readPose(fig, pose),
+    hands: { L: hands[0], R: hands[1] }, face: clone(M.DEFAULT_FACE), pins: {}, anchors: {}, gaze: null, relaxed: false,
   };
 }
 const prop = (id, type, name, pos, rotY = 0, params = {}) => ({ id, kind: "prop", type, name, pos, rot: [0, rotY, 0], scale: [1, 1, 1], params });
@@ -27,8 +28,8 @@ const prop = (id, type, name, pos, rotY = 0, params = {}) => ({ id, kind: "prop"
 export function buildExample() {
   const v = newVineta("Viñeta 1 · Frente a frente");
   const viejo = seated("f_viejo", "El viejo", { height: 172, heads: 7.5, build: 0.55, shape: 0 }, [-0.9, 0, 0], 90,
-    { wrist_L: [-0.5, 0.8, -0.13], wrist_R: [-0.48, 0.8, 0.15] }, { spine: [4, 0, 0], neck: [6, 0, 0] });
-  viejo.hands = { L: "apoyada", R: "sujetar" };
+    { wrist_L: [-0.5, 0.8, -0.13], wrist_R: [-0.48, 0.8, 0.15] }, { spine: [4, 0, 0], neck: [6, 0, 0] }, ["apoyada", "vaso"]);
+  viejo.face = { mode: "detallado", guides: false, expr: { ...M.EXPRESSIONS.determinacion }, exprName: "determinacion" };
   const joven = seated("f_joven", "El aprendiz", { height: 178, heads: 7.5, build: 0.4, shape: 0 }, [0.9, 0, 0], -90,
     { wrist_L: [0.47, 0.79, 0.14], wrist_R: [0.47, 0.79, -0.13] }, { spine: [14, 0, 0], chest: [6, 0, 0] });
   viejo.gaze = joven.id; joven.gaze = viejo.id;
@@ -56,5 +57,5 @@ export function buildExample() {
   v2.name = "Viñeta 2 · Primer plano del viejo";
   v2.camera = { pos: [0.18, 1.22, 0.5], target: [-0.86, 1.13, -0.02], mm: 50, roll: 0, aspect: "1:1", shot: "primer", angle: "normal" };
 
-  return { version: 1, name: "El viejo y el aprendiz", cur: 0, vinetas: [v, v2] };
+  return { version: 2, name: "El viejo y el aprendiz", cur: 0, vinetas: [v, v2] };
 }

@@ -51,15 +51,17 @@ grid.add(minor, major); scene.add(grid);
 const ruler = new THREE.Group(); scene.add(ruler);
 
 // Ayudas de pose (encima de todo)
-const handleMat = new THREE.MeshBasicMaterial({ color: 0x2f8fd8, depthTest: false, transparent: true, opacity: 0.9 });
+const HANDLE_KIND = { wrist_L: "end", wrist_R: "end", ankle_L: "end", ankle_R: "end", hips: "core", chest: "core", head: "core", elbow_L: "pole", elbow_R: "pole", knee_L: "pole", knee_R: "pole" };
+const hMat = c => new THREE.MeshBasicMaterial({ color: c, depthTest: false, transparent: true, opacity: 0.92 });
+const handleMats = { end: hMat(0x2f8fd8), core: hMat(0x8e5bd6), pole: hMat(0xe0873b), pin: hMat(0xd9443a) };
 const handleRing = new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true });
 const handles = {};
-for (const n of ["wrist_L", "wrist_R", "ankle_L", "ankle_R", "hips"]) {
+for (const [n, kind] of Object.entries(HANDLE_KIND)) {
   const g = new THREE.Group();
-  const s = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), handleMat);
-  const r = new THREE.Mesh(new THREE.SphereGeometry(1.25, 16, 12), handleRing);
+  const s = new THREE.Mesh(new THREE.SphereGeometry(kind === "pole" ? 0.8 : 1, 16, 12), handleMats[kind]);
+  const r = new THREE.Mesh(new THREE.SphereGeometry(kind === "pole" ? 1.05 : 1.25, 16, 12), handleRing);
   r.renderOrder = 19; s.renderOrder = 20;
-  g.add(r, s); g.userData.handle = n; s.userData.handle = n; r.userData.handle = n;
+  g.add(r, s); g.userData.handle = n; g.userData.core = s; g.userData.kind = kind; s.userData.handle = n; r.userData.handle = n;
   g.visible = false; overlay.add(g); handles[n] = g;
 }
 const actionLine = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: 0xe0563b, depthTest: false, transparent: true, opacity: 0.85 }));
@@ -84,7 +86,7 @@ controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
 const store = new Store();
 const ui = {
   tab: "escena", sel: null, joint: null, tmode: "translate", pinFeet: true,
-  clipboardPose: null, through: false, dirty: 3, exportOpen: false, status: "",
+  clipboardPose: null, through: false, rings: false, sym: false, finger: "index", handSide: "L", dirty: 3, exportOpen: false, status: "",
 };
 const world = new Map();   // id → THREE.Group (objetos)
 const figs = new Map();    // id → figura del maniquí
@@ -101,8 +103,10 @@ function hScale(fig) { return fig.d.H / 1.75; }
 function buildObject(o) {
   let g;
   if (o.kind === "figure") {
-    const fig = M.buildFigure(o.params, o.hands);
+    o.face ??= clone(M.DEFAULT_FACE); o.pins ??= {}; o.anchors ??= {};
+    const fig = M.buildFigure(o.params);
     M.applyPose(fig, o.pose, o.relaxed);
+    M.applyFace(fig, o.face);
     figs.set(o.id, fig);
     g = fig.root;
     g.position.fromArray(o.pos); g.rotation.set(0, (o.rotY || 0) * DEG, 0);
@@ -291,13 +295,24 @@ function buildRuler() {
 // ---------------------------------------------------------------- Selección y gizmo
 function select(id, joint = null) {
   ui.sel = id; ui.joint = joint;
+  if (joint && /^(thumb|index|middle|ring|pinky)/.test(joint)) { ui.handSide = joint.slice(-1); ui.finger = joint.replace(/\d_[LR]$/, ""); ui.fingerOpen = true; }
   attachGizmo(); buildRuler(); renderPanel(); markDirty();
 }
 function attachGizmo() {
   tcontrols.detach();
+  tcontrols.size = coarse ? 1.35 : 1;
   if (!ui.sel || ui.through) return;
   const o = selObj(), l = selLight();
-  if (o && ui.tab !== "pose" && ui.tmode) {
+  if (o?.kind === "figure" && ui.tab === "pose") {
+    const j = ui.joint && figs.get(o.id)?.joints[ui.joint];
+    if (j && ui.rings) {
+      tcontrols.attach(j); tcontrols.setMode("rotate"); tcontrols.setSpace("local");
+      tcontrols.showX = tcontrols.showY = tcontrols.showZ = true;
+      tcontrols.size = coarse ? 0.95 : 0.65;
+    }
+    return;
+  }
+  if (o && ui.tmode) {
     tcontrols.attach(world.get(o.id));
     tcontrols.setMode(o.kind === "figure" && ui.tmode === "scale" ? "translate" : ui.tmode);
     const rotFig = o.kind === "figure" && tcontrols.mode === "rotate";
@@ -311,14 +326,24 @@ function attachGizmo() {
 tcontrols.addEventListener("dragging-changed", e => { controls.enabled = !e.value; });
 tcontrols.addEventListener("objectChange", () => {
   const obj = tcontrols.object; if (!obj) return;
+  if (obj.userData.jointName) {
+    const o = selObj(), fig = figs.get(o.id);
+    M.clampJoint(fig, obj.userData.jointName, o.relaxed);
+    if (ui.sym) symmetryFrom(o, fig, obj.userData.jointName);
+    markDirty(); return;
+  }
   if (obj.userData.lightId && !obj.userData.objId) {
     const L = lights.get(obj.userData.lightId); L.light.position.copy(obj.position);
   }
-  if (ui.sel && ruler.visible) { ruler.position.copy(obj.position); ruler.rotation.y = obj.rotation.y; }
+  if (ui.sel && ruler.visible && obj === world.get(ui.sel)) { ruler.position.copy(obj.position); ruler.rotation.y = obj.rotation.y; }
   markDirty();
 });
 tcontrols.addEventListener("mouseUp", () => {
   const obj = tcontrols.object; if (!obj) return;
+  if (obj.userData.jointName) {
+    const o = selObj(); o.pose = M.readPose(figs.get(o.id), o.pose);
+    store.commit(); renderPanel(); return;
+  }
   if (obj.userData.lightId && !obj.userData.objId) {
     const def = findLight(obj.userData.lightId); def.pos = obj.position.toArray().map(v => round(v, 3));
   } else {
@@ -354,7 +379,7 @@ renderer.domElement.addEventListener("pointerdown", e => {
   const p = handles[name].position.clone();
   const n = camera.getWorldDirection(new THREE.Vector3());
   drag = { name, fig, o, plane: new THREE.Plane().setFromNormalAndCoplanarPoint(n, p), last: p.clone(), id: e.pointerId };
-  if (name === "wrist_L" || name === "wrist_R") o.gazeHold = true;
+  if (name === "head") o.gaze = null;
   renderer.domElement.setPointerCapture(e.pointerId);
   controls.enabled = false;
 }, { capture: true });
@@ -364,21 +389,24 @@ renderer.domElement.addEventListener("pointermove", e => {
   const hit = new THREE.Vector3();
   if (!ray.ray.intersectPlane(drag.plane, hit)) return;
   const { fig, o, name } = drag;
-  if (name === "hips") {
-    const delta = hit.clone().sub(drag.last);
-    M.moveHips(fig, delta, ui.pinFeet, o.relaxed);
-  } else {
-    if (name.startsWith("ankle") && hit.y < 0.06 * hScale(fig)) hit.y = 0.045 * hScale(fig);
+  const kind = HANDLE_KIND[name];
+  if (name === "hips") { M.moveHips(fig, hit.clone().sub(drag.last)); resolvePins(o, fig, null); }
+  else if (name === "chest") { M.solveIK(fig, "chest", hit, o.relaxed, 10); resolvePins(o, fig, null); }
+  else if (name === "head") M.lookAt(fig, hit, o.relaxed);
+  else if (kind === "pole") M.swingPole(fig, name, hit, o.relaxed);
+  else {
+    if (name.startsWith("ankle") && hit.y < 0.045 * hScale(fig)) hit.y = 0.045 * hScale(fig);
     M.solveIK(fig, name, hit, o.relaxed);
   }
+  if (ui.sym && /_[LR]$/.test(name)) symmetryFrom(o, fig, name);
   drag.last.copy(hit);
   markDirty();
 });
 function endDrag(e) {
   if (!drag || (e && e.pointerId !== drag.id)) return;
-  const { fig, o } = drag;
-  o.pose = M.readPose(fig);
-  delete o.gazeHold;
+  const { fig, o, name } = drag;
+  if (o.pins?.[name]) pinHere(o, fig, name);
+  o.pose = M.readPose(fig, o.pose);
   drag = null; controls.enabled = true;
   store.commit(); renderPanel();
 }
@@ -455,12 +483,23 @@ function updateHelpers() {
   const o = selObj();
   const fig = o?.kind === "figure" ? figs.get(o.id) : null;
   const showH = handlesActive();
+  // Manos ancladas a otro personaje u objeto
+  for (const ob of store.v.objects) {
+    if (ob.kind !== "figure" || !ob.anchors) continue;
+    const f = figs.get(ob.id); if (!f) continue;
+    for (const [end, a] of Object.entries(ob.anchors)) {
+      if (!a || (drag && drag.o === ob && drag.name === end)) continue;
+      const t = anchorTarget(a); if (t) M.solveIK(f, end, t, ob.relaxed, 8);
+    }
+  }
   for (const [n, h] of Object.entries(handles)) {
     h.visible = !!(showH && fig);
     if (!h.visible) continue;
-    fig.joints[n].getWorldPosition(h.position);
+    if (n === "head") fig.joints.head.localToWorld(h.position.set(0, fig.d.hh * 1.12, 0));
+    else fig.joints[n].getWorldPosition(h.position);
     const dist = camera.position.distanceTo(h.position);
-    h.scale.setScalar(Math.max(0.018, dist * (coarse ? 0.022 : 0.014)));
+    h.scale.setScalar(Math.max(0.016, dist * (coarse ? 0.021 : 0.013)) * (h.userData.kind === "pole" ? 0.85 : 1));
+    h.userData.core.material = o.pins?.[n] ? handleMats.pin : handleMats[h.userData.kind];
   }
   // Mirada (personajes que miran al lector o a otro personaje)
   for (const ob of store.v.objects) {
@@ -536,12 +575,17 @@ renderer.setAnimationLoop(now => {
 // ---------------------------------------------------------------- Operaciones del modelo
 function addFigure() {
   const n = store.v.objects.filter(o => o.kind === "figure").length;
+  const pose = M.emptyPose();
+  Object.assign(pose.rot, clone(POSE_LIBRARY.de_pie.pose.rot), M.handPoseRot("relajada", "L"), M.handPoseRot("relajada", "R"));
   const o = {
     id: uid("f"), kind: "figure", name: `Personaje ${n + 1}`, pos: [n * 0.8, 0, 0], rotY: 0,
-    params: { ...M.DEFAULT_PARAMS }, pose: { rot: clone(POSE_LIBRARY.de_pie.pose.rot), hips: [0, 0, 0] },
-    hands: { L: "relajada", R: "relajada" }, gaze: null, relaxed: false,
+    params: { ...M.DEFAULT_PARAMS }, pose, hands: { L: "relajada", R: "relajada" },
+    face: clone(M.DEFAULT_FACE), pins: {}, anchors: {}, gaze: null, relaxed: false,
   };
-  store.v.objects.push(o); buildObject(o); store.commit(); select(o.id);
+  store.v.objects.push(o); const g = buildObject(o);
+  const fig = figs.get(o.id);
+  pinHere(o, fig, "ankle_L"); pinHere(o, fig, "ankle_R");
+  void g; store.commit(); select(o.id);
 }
 function addProp(type) {
   const def = PRIMITIVES[type] || PROPS[type];
@@ -568,22 +612,90 @@ function duplicateSelected() {
   store.v.objects.push(c); buildObject(c); store.commit(); select(c.id);
 }
 function setPose(o, lib) {
-  const fig = figs.get(o.id);
-  const s = hScale(fig);
+  const fig = figs.get(o.id), s = hScale(fig);
   const full = M.emptyPose();
+  Object.assign(full.rot, clone(o.pose.rot));
+  for (const j of M.BODY_JOINTS) full.rot[j] = [0, 0, 0];
   for (const [j, r] of Object.entries(lib.pose.rot)) full.rot[j] = r.slice();
+  if (lib.hands) Object.assign(full.rot, M.handPoseRot(lib.hands[0], "L"), M.handPoseRot(lib.hands[1], "R"));
   full.hips = (lib.pose.hips || [0, 0, 0]).map(v => v * s);
+  full.body = null;
   M.applyPose(fig, full, o.relaxed);
   if (lib.pose.ik) {
     fig.root.updateMatrixWorld(true);
     for (const [end, p] of Object.entries(lib.pose.ik)) {
       const target = new THREE.Vector3(p[0] * s, p[1] * s, p[2] * s).applyMatrix4(fig.root.matrixWorld);
-      M.solveIK(fig, end, target, o.relaxed, 24);
+      M.solveIK(fig, end, target, o.relaxed, 30);
     }
   }
-  o.pose = M.readPose(fig);
+  const pose = M.readPose(fig, full);
+  pose.body = lib.pose.body ? lib.pose.body.slice() : null;
+  M.applyPose(fig, pose, o.relaxed);
+  if (lib.pose.ground !== false) groundFigure(fig);
+  o.pose = M.readPose(fig, pose);
   if (lib.hands) o.hands = { L: lib.hands[0], R: lib.hands[1] };
-  rebuildObject(o);
+  o.gaze = null;
+  for (const end of Object.keys(o.pins || {})) if (o.pins[end]) pinHere(o, fig, end);
+  markDirty(3);
+}
+
+// Apoya el punto más bajo de la figura sobre el piso
+function groundFigure(fig) {
+  const min = M.lowestPoint(fig) - fig.root.position.y;
+  fig.joints.hips.position.y -= min;
+  fig.root.updateMatrixWorld(true);
+}
+// Fijar manos y pies: el punto se guarda relativo a la figura, así viaja con ella al moverla
+const ENDS = [["wrist_L", "Mano izq."], ["wrist_R", "Mano der."], ["ankle_L", "Pie izq."], ["ankle_R", "Pie der."]];
+function pinHere(o, fig, end) {
+  o.pins ??= {};
+  const w = fig.joints[end].getWorldPosition(new THREE.Vector3());
+  o.pins[end] = fig.root.worldToLocal(w).toArray().map(v => round(v, 4));
+}
+function resolvePins(o, fig, except) {
+  for (const [end, p] of Object.entries(o.pins || {})) {
+    if (!p || end === except || o.anchors?.[end]) continue;
+    M.solveIK(fig, end, fig.root.localToWorld(new THREE.Vector3(...p)), o.relaxed, 10);
+  }
+}
+// Simetría en vivo: copia el lado tocado al otro
+function symmetryFrom(o, fig, jointOrEnd) {
+  const side = jointOrEnd.match(/_([LR])$/)?.[1]; if (!side) return;
+  const pose = M.readPose(fig, o.pose);
+  M.symmetrize(pose, side);
+  M.applyPose(fig, pose, o.relaxed);
+}
+// Anclas: punto de otro personaje (articulación) u objeto
+function anchorTarget(a) {
+  const t = a.part ? figs.get(a.obj)?.joints[a.part] : world.get(a.obj);
+  if (!t) return null;
+  t.updateMatrixWorld(true);
+  return t.localToWorld(new THREE.Vector3(...a.off));
+}
+function setAnchor(o, end, value) {
+  o.anchors ??= {};
+  if (!value) { delete o.anchors[end]; return; }
+  const [obj, part] = value.split("|");
+  const t = part ? figs.get(obj)?.joints[part] : world.get(obj);
+  if (!t) return;
+  const w = figs.get(o.id).joints[end].getWorldPosition(new THREE.Vector3());
+  t.updateMatrixWorld(true);
+  o.anchors[end] = { obj, part: part || null, off: t.worldToLocal(w).toArray().map(v => round(v, 4)) };
+}
+// Migración de proyectos de la Fase 1 al esqueleto nuevo
+function migrate(p) {
+  if (p.version >= 2) return p;
+  for (const v of p.vinetas) for (const o of v.objects) {
+    if (o.kind !== "figure") continue;
+    const pose = M.emptyPose();
+    Object.assign(pose.rot, M.fromV1(o.pose?.rot || {}));
+    const h = o.hands || { L: "relajada", R: "relajada" };
+    Object.assign(pose.rot, M.handPoseRot(h.L, "L"), M.handPoseRot(h.R, "R"));
+    pose.hips = o.pose?.hips || [0, 0, 0];
+    o.pose = pose; o.face = clone(M.DEFAULT_FACE); o.pins = {}; o.anchors = {};
+  }
+  p.version = 2;
+  return p;
 }
 
 // ---------------------------------------------------------------- Interfaz (paneles)
@@ -661,37 +773,117 @@ function panelPose() {
     <div class="olist">${firsts.map(f => `<button class="oitem" data-act="sel" data-val="${f.id}"><span>${esc(f.name)}</span></button>`).join("")}</div>
     <button class="btn accent" data-act="add-fig">+ Personaje</button>`;
   }
-  const p = o.params, fig = figs.get(o.id);
-  let h = `<h2>${esc(o.name)}</h2><p class="sub">Arrastra los puntos azules: manos, pies y pelvis. Toca una parte del cuerpo para girarla con precisión.</p>`;
-  h += `<div class="lib">${Object.entries(POSE_LIBRARY).map(([k, d]) => `<button class="btn" data-act="pose" data-val="${k}">${d.label}</button>`).join("")}</div>`;
+  const p = o.params;
+  const lib = Object.entries(POSE_LIBRARY);
+  let h = `<h2>${esc(o.name)}</h2>
+  <p class="sub">Arrastra los puntos: <b class="k-end">azules</b> manos y pies, <b class="k-core">morados</b> pelvis, pecho y cabeza, <b class="k-pole">naranjas</b> codos y rodillas. Toca el cuerpo para girar una parte.</p>
+  <div class="row"><button class="btn accent" data-act="ground">Apoyar en el piso</button><button class="btn${ui.sym ? " on" : ""}" data-act="sym">Simetría ${ui.sym ? "activa" : "apagada"}</button><button class="btn" data-act="mirror">Espejo</button></div>
+  <h3>Fijar en su lugar</h3><div class="pills">${ENDS.map(([e, l]) => pill(e, o.pins?.[e] ? e : "", l, "pin")).join("")}</div>
+  <p class="sub">Lo fijado (en rojo) no se mueve cuando mueves la pelvis, el pecho o el resto del cuerpo.</p>`;
+  h += `<h3>Poses</h3><div class="lib">${lib.filter(([, d]) => !d.test).map(([k, d]) => `<button class="btn" data-act="pose" data-val="${k}">${d.label}</button>`).join("")}</div>
+  <details class="more"><summary>Poses de prueba de tus páginas (${lib.filter(([, d]) => d.test).length})</summary><div class="lib">${lib.filter(([, d]) => d.test).map(([k, d]) => `<button class="btn" data-act="pose" data-val="${k}">${d.label}</button>`).join("")}</div></details>`;
   const saved = savedPoses();
-  h += `<details class="more"${saved.length ? "" : ""}><summary>Mis poses (${saved.length})</summary>
+  h += `<details class="more"><summary>Mis poses (${saved.length})</summary>
     <div class="row"><input class="text" id="posename" placeholder="Nombre de la pose" aria-label="Nombre de la pose"><button class="btn" data-act="pose-save">Guardar actual</button></div>
-    ${saved.length ? `<div class="lib">${saved.map((s, i) => `<span class="saved"><button class="btn" data-act="pose-mine" data-val="${i}">${esc(s.name)}</button><button class="x" data-act="pose-del" data-val="${i}" aria-label="Borrar ${esc(s.name)}">×</button></span>`).join("")}</div>` : ""}</details>`;
+    ${saved.length ? `<div class="lib">${saved.map((x, i) => `<span class="saved"><button class="btn" data-act="pose-mine" data-val="${i}">${esc(x.name)}</button><button class="x" data-act="pose-del" data-val="${i}" aria-label="Borrar ${esc(x.name)}">×</button></span>`).join("")}</div>` : ""}</details>`;
   // Articulación
   const j = ui.joint;
-  h += `<h3>Articulación</h3><select class="text" data-act="joint" aria-label="Articulación">${["", ...M.JOINTS].map(n => `<option value="${n}" ${n === (j || "") ? "selected" : ""}>${n ? M.JOINT_LABEL[n] : "Toca el cuerpo o elige…"}</option>`).join("")}</select>`;
+  const opt = n => `<option value="${n}" ${n === (j || "") ? "selected" : ""}>${PSEUDO[n]?.label || M.jointLabel(n)}</option>`;
+  const grp = (label, list) => `<optgroup label="${label}">${list.map(opt).join("")}</optgroup>`;
+  h += `<h3>Articulación</h3><select class="text" data-act="joint" aria-label="Articulación"><option value="">Toca el cuerpo o elige…</option>
+    ${grp("Tronco y cabeza", ["hips", "spine_all", "spine1", "spine2", "spine3", "chest", "neck_all", "neck1", "neck2", "head", "jaw"])}
+    ${grp("Brazo izquierdo", ["clavicle_L", "shoulder_L", "elbow_L", "wrist_L"])}${grp("Brazo derecho", ["clavicle_R", "shoulder_R", "elbow_R", "wrist_R"])}
+    ${grp("Pierna izquierda", ["hip_L", "knee_L", "ankle_L", "toes_L"])}${grp("Pierna derecha", ["hip_R", "knee_R", "ankle_R", "toes_R"])}
+    ${j && /^(thumb|index|middle|ring|pinky)/.test(j) ? grp("Dedo", [j]) : ""}</select>`;
   if (j) {
-    const L = M.limitsFor(j, o.relaxed), r = o.pose.rot[j] || [0, 0, 0];
-    ["x", "y", "z"].forEach((ax, i) => {
-      if (L[ax][0] === L[ax][1]) return;
-      h += slider("j" + ax, M.AXIS_LABEL[ax], r[i], L[ax][0], L[ax][1], 1, "°", "joint-rot");
-    });
-    h += `<button class="btn" data-act="joint-reset">Restablecer ${esc(M.JOINT_LABEL[j].toLowerCase())}</button>`;
+    h += jointSliders(o, j);
+    h += `<div class="row"><button class="btn" data-act="joint-reset">Restablecer</button>${PSEUDO[j] ? "" : `<button class="btn${ui.rings ? " on" : ""}" data-act="rings">${ui.rings ? "Ocultar anillos" : "Girar con anillos"}</button>`}</div>`;
   }
+  // Manos
   h += `<h3>Manos</h3>`;
-  for (const s of ["L", "R"]) h += `<div class="pills"><span class="pl">${s === "L" ? "Izq." : "Der."}</span>${Object.entries(M.HAND_POSES).map(([k, d]) => pill(k, o.hands[s], d.label, "hand", `data-side="${s}"`)).join("")}</div>`;
+  for (const sd of ["L", "R"]) h += `<div class="pills"><span class="pl">${sd === "L" ? "Izq." : "Der."}</span>${Object.entries(M.HAND_POSES).map(([k, d]) => pill(k, o.hands?.[sd], d.label, "hand", `data-side="${sd}"`)).join("")}</div>`;
+  const fs = ui.handSide, fn = ui.finger;
+  h += `<details class="more"${ui.fingerOpen ? " open" : ""} data-det="finger"><summary>Dedo por dedo</summary>
+    <div class="pills">${pill("L", fs, "Mano izquierda", "hand-side")}${pill("R", fs, "Mano derecha", "hand-side")}</div>
+    <div class="pills">${Object.entries(M.FINGER_LABEL).map(([k, l]) => pill(k, fn, l, "finger")).join("")}</div>
+    ${fingerSliders(o, fs, fn)}</details>`;
+  // Rostro
+  const f = o.face || M.DEFAULT_FACE, e = f.expr;
+  h += `<h3>Rostro</h3><div class="pills">${pill("simple", f.mode, "Guías de construcción", "face-mode")}${pill("detallado", f.mode, "Detallado", "face-mode")}${pill("guides", f.guides ? "guides" : "", "Mostrar guías", "face-guides")}</div>
+  <div class="pills">${Object.entries(M.EXPRESSIONS).map(([k, d]) => pill(k, f.exprName, d.label, "expr")).join("")}${savedExpr().map((x, i) => pill("mine:" + i, f.exprName, x.name, "expr")).join("")}</div>
+  <details class="more"${ui.faceOpen ? " open" : ""} data-det="face"><summary>Ajustar expresión</summary>
+    ${faceSlider("brow.0", "Ceja izquierda (baja ↔ sube)", e.brow[0], -1, 1, 0.05)}${faceSlider("brow.1", "Ceja derecha (baja ↔ sube)", e.brow[1], -1, 1, 0.05)}
+    ${faceSlider("brow.2", "Ceja izquierda (enojo ↔ tristeza)", e.brow[2], -30, 30, 1)}${faceSlider("brow.3", "Ceja derecha (enojo ↔ tristeza)", e.brow[3], -30, 30, 1)}
+    ${faceSlider("lid.0", "Párpado izquierdo (cerrado ↔ muy abierto)", e.lid[0], 0, 1.3, 0.05)}${faceSlider("lid.1", "Párpado derecho", e.lid[1], 0, 1.3, 0.05)}
+    ${faceSlider("open", "Boca abierta", e.open, 0, 1, 0.05)}${faceSlider("wide", "Boca (estrecha ↔ ancha)", e.wide, 0.6, 1.4, 0.05)}
+    ${faceSlider("smile.0", "Comisura izquierda (abajo ↔ arriba)", e.smile[0], -1, 1, 0.05)}${faceSlider("smile.1", "Comisura derecha", e.smile[1], -1, 1, 0.05)}
+    ${faceSlider("jaw", "Mandíbula", e.jaw, 0, 28, 1)}
+    <div class="row"><input class="text" id="exprname" placeholder="Nombre de la expresión" aria-label="Nombre de la expresión"><button class="btn" data-act="expr-save">Guardar expresión</button></div>
+    ${savedExpr().length ? `<div class="lib">${savedExpr().map((x, i) => `<span class="saved"><span class="pl">${esc(x.name)}</span><button class="x" data-act="expr-del" data-val="${i}" aria-label="Borrar ${esc(x.name)}">×</button></span>`).join("")}</div>` : ""}
+  </details>`;
+  // Mirada y anclas
   const others = store.v.objects.filter(x => x.kind === "figure" && x.id !== o.id);
-  h += `<h3>Mirada</h3><div class="pills">${pill("", o.gaze || "", "Libre", "gaze")}${pill("camera", o.gaze || "", "Al lector", "gaze")}${others.map(f => pill(f.id, o.gaze || "", "A " + f.name, "gaze")).join("")}</div>`;
-  h += `<h3>Herramientas</h3><div class="row"><button class="btn" data-act="mirror">Espejo izq. ↔ der.</button><button class="btn" data-act="copy-pose">Copiar pose</button><button class="btn" data-act="paste-pose" ${ui.clipboardPose ? "" : "disabled"}>Pegar pose</button></div>`;
-  h += `<div class="toggles">${toggle("pin", "Fijar pies al mover la pelvis", "Para sentarse, agacharse o inclinarse", ui.pinFeet, "ui")}
-    ${toggle("relaxed", "Relajar límites articulares", "Para estilos caricaturescos", o.relaxed, "fig")}
+  h += `<h3>Mirada</h3><div class="pills">${pill("", o.gaze || "", "Libre", "gaze")}${pill("camera", o.gaze || "", "Al lector", "gaze")}${others.map(x => pill(x.id, o.gaze || "", "A " + x.name, "gaze")).join("")}</div>`;
+  const anchorOpts = cur => {
+    let r = `<option value="">Sin anclar</option>`;
+    for (const x of others) r += `<optgroup label="${esc(x.name)}">${ANCHOR_PARTS.map(([pt, l]) => `<option value="${x.id}|${pt}" ${cur === x.id + "|" + pt ? "selected" : ""}>${l}</option>`).join("")}</optgroup>`;
+    const props = store.v.objects.filter(x => x.kind !== "figure");
+    if (props.length) r += `<optgroup label="Objetos">${props.map(x => `<option value="${x.id}" ${cur === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</optgroup>`;
+    return r;
+  };
+  h += `<h3>Anclar las manos</h3><p class="sub">Acerca la mano al lugar y luego ánclala: si el otro personaje u objeto se mueve, la mano lo sigue.</p>`;
+  for (const [end, l] of ENDS.slice(0, 2)) {
+    const a = o.anchors?.[end], cur = a ? (a.part ? `${a.obj}|${a.part}` : a.obj) : "";
+    h += `<label class="sel"><span>${l}</span><select data-act="anchor" data-end="${end}">${anchorOpts(cur)}</select></label>`;
+  }
+  h += `<h3>Herramientas</h3><div class="row"><button class="btn" data-act="copy-pose">Copiar pose</button><button class="btn" data-act="paste-pose" ${ui.clipboardPose ? "" : "disabled"}>Pegar pose</button></div>`;
+  h += `<div class="toggles">${toggle("relaxed", "Relajar límites articulares", "Para estilos caricaturescos", o.relaxed, "fig")}
     ${toggle("action", "Línea de acción", "Curva de cabeza a pie de apoyo", store.v.view.action)}
     ${toggle("com", "Centro de masa", "Avisa si la figura de pie pierde el equilibrio", store.v.view.com)}</div>`;
-  h += `<h3>Cuerpo</h3>${slider("height", "Altura", p.height, 140, 210, 1, " cm", "param")}${slider("heads", "Proporción", p.heads, 6, 8.5, 0.25, " cabezas", "param")}
+  h += `<details class="more"><summary>Cuerpo</summary>${slider("height", "Altura", p.height, 140, 210, 1, " cm", "param")}${slider("heads", "Proporción", p.heads, 6, 8.5, 0.25, " cabezas", "param")}
   ${slider("build", "Complexión", p.build, 0, 1, 0.05, "", "param")}${slider("shape", "Forma (masculina ↔ femenina)", p.shape, 0, 1, 0.05, "", "param")}
-  <p class="sub">${p.height} cm · ${p.heads} cabezas · una cabeza mide ${round(p.height / p.heads, 1)} cm</p>`;
+  <p class="sub">${p.height} cm · ${p.heads} cabezas · una cabeza mide ${round(p.height / p.heads, 1)} cm</p></details>`;
   return h;
+}
+
+// Articulaciones que se mueven en conjunto
+const PSEUDO = {
+  spine_all: { label: "Columna completa", joints: ["spine1", "spine2", "spine3", "chest"] },
+  neck_all: { label: "Cuello completo", joints: ["neck1", "neck2"] },
+};
+const ANCHOR_PARTS = [["head", "Cabeza"], ["jaw", "Cara (boca)"], ["chest", "Pecho"], ["shoulder_L", "Hombro izquierdo"], ["shoulder_R", "Hombro derecho"], ["hips", "Cintura"], ["wrist_L", "Mano izquierda"], ["wrist_R", "Mano derecha"]];
+function jointSliders(o, j) {
+  const refs = PSEUDO[j]?.joints || [j];
+  const L = M.limitsFor(refs[0], o.relaxed), labels = M.axisLabels(refs[0]);
+  let h = "";
+  ["x", "y", "z"].forEach((ax, i) => {
+    if (L[ax][0] === L[ax][1]) return;
+    const sg = M.sideSign(refs[0], ax), n = refs.length;
+    const raw = refs.reduce((a, k) => a + (o.pose.rot[k]?.[i] || 0), 0);
+    let lo = L[ax][0] * n, hi = L[ax][1] * n; if (sg < 0) [lo, hi] = [-hi, -lo];
+    const id = `j-${j}-${ax}`;
+    h += `<div class="field"><label for="${id}">${esc(labels[ax] || ax.toUpperCase())} <output id="${id}-o">${Math.round(raw * sg)}°</output></label>
+      <input type="range" id="${id}" data-act="joint-rot" data-joint="${j}" data-ax="${i}" min="${lo}" max="${hi}" step="1" value="${round(raw * sg, 1)}"></div>`;
+  });
+  return h;
+}
+function fingerSliders(o, side, finger) {
+  const names = finger === "thumb" ? ["thumb1", "thumb2", "thumb3"] : [finger + "1", finger + "2", finger + "3"];
+  return names.map((n, i) => `<p class="sub">${["Base", "Medio", "Punta"][i]}</p>${jointSliders(o, `${n}_${side}`)}`).join("");
+}
+const faceSlider = (key, label, val, min, max, step) => {
+  const id = "fc-" + key.replace(".", "-");
+  return `<div class="field"><label for="${id}">${esc(label)} <output id="${id}-o">${fmt(val, step)}</output></label>
+  <input type="range" id="${id}" data-act="face" data-key="${key}" min="${min}" max="${max}" step="${step}" value="${val}"></div>`;
+};
+function savedExpr() { try { return JSON.parse(localStorage.getItem("arnes-expr") || "[]"); } catch { return []; } }
+function writeExpr(a) { try { localStorage.setItem("arnes-expr", JSON.stringify(a)); } catch { toast("Este navegador no permite guardar expresiones aquí."); } }
+function setFace(o) {
+  const fig = figs.get(o.id);
+  o.pose.rot.jaw = [o.face.expr.jaw || 0, 0, 0];
+  M.setJoint(fig, "jaw", o.pose.rot.jaw, o.relaxed);
+  M.applyFace(fig, o.face);
+  markDirty();
 }
 
 function panelCamara() {
@@ -751,6 +943,10 @@ $("#tbar").addEventListener("click", e => {
 });
 
 // Eventos del panel
+panel.addEventListener("toggle", e => {
+  const d = e.target; if (!d.dataset?.det) return;
+  if (d.dataset.det === "finger") ui.fingerOpen = d.open; else if (d.dataset.det === "face") ui.faceOpen = d.open;
+}, true);
 panel.addEventListener("click", e => {
   const b = e.target.closest("[data-act]"); if (!b || b.tagName === "INPUT" || b.tagName === "SELECT") return;
   const act = b.dataset.act, val = b.dataset.val;
@@ -770,12 +966,38 @@ panel.addEventListener("click", e => {
     case "fwd": { const n = store.copyForward(ui.sel); store.commit(); toast(n ? `Copiado a ${n} viñeta${n > 1 ? "s" : ""} siguiente${n > 1 ? "s" : ""}.` : "No hay viñetas después de esta."); break; }
     case "pose": setPose(o, POSE_LIBRARY[val]); store.commit(); renderPanel(); markDirty(); break;
     case "pose-save": { const name = $("#posename").value.trim() || `Pose ${savedPoses().length + 1}`; savePose(name, o); renderPanel(); toast("Pose guardada en este dispositivo."); break; }
-    case "pose-mine": { const s = savedPoses()[+val]; setPose(o, { pose: s.pose, hands: [s.hands.L, s.hands.R] }); store.commit(); renderPanel(); break; }
+    case "pose-mine": { const sv = savedPoses()[+val]; setPose(o, { pose: sv.pose, hands: null }); o.hands = { ...sv.hands }; store.commit(); renderPanel(); break; }
     case "pose-del": { const all = savedPoses(); all.splice(+val, 1); writePoses(all); renderPanel(); break; }
-    case "joint-reset": { o.pose.rot[ui.joint] = [0, 0, 0]; M.applyPose(figs.get(o.id), o.pose, o.relaxed); store.commit(); renderPanel(); markDirty(); break; }
-    case "hand": o.hands[b.dataset.side] = val; rebuildObject(o); store.commit(); renderPanel(); markDirty(); break;
-    case "gaze": o.gaze = val || null; if (!o.gaze) { o.pose = M.readPose(figs.get(o.id)); } store.commit(); renderPanel(); markDirty(); break;
-    case "mirror": { o.pose = M.mirrorPose(o.pose); o.hands = { L: o.hands.R, R: o.hands.L }; rebuildObject(o); store.commit(); markDirty(); renderPanel(); break; }
+    case "joint-reset": { for (const k of PSEUDO[ui.joint]?.joints || [ui.joint]) o.pose.rot[k] = [0, 0, 0]; M.applyPose(figs.get(o.id), o.pose, o.relaxed); store.commit(); renderPanel(); markDirty(); break; }
+    case "hand": {
+      const sd = b.dataset.side;
+      o.hands[sd] = val; Object.assign(o.pose.rot, M.handPoseRot(val, sd));
+      if (ui.sym) { const other = sd === "L" ? "R" : "L"; o.hands[other] = val; Object.assign(o.pose.rot, M.handPoseRot(val, other)); }
+      M.applyPose(figs.get(o.id), o.pose, o.relaxed); store.commit(); renderPanel(); markDirty(); break;
+    }
+    case "hand-side": ui.handSide = val; ui.fingerOpen = true; renderPanel(); break;
+    case "finger": ui.finger = val; ui.fingerOpen = true; renderPanel(); break;
+    case "gaze": o.gaze = val || null; if (!o.gaze) { o.pose = M.readPose(figs.get(o.id), o.pose); } store.commit(); renderPanel(); markDirty(); break;
+    case "mirror": { o.pose = M.mirrorPose(o.pose); o.hands = { L: o.hands.R, R: o.hands.L }; M.applyPose(figs.get(o.id), o.pose, o.relaxed); store.commit(); markDirty(); renderPanel(); break; }
+    case "sym": ui.sym = !ui.sym; toast(ui.sym ? "Simetría activa: lo que muevas de un lado se copia al otro." : "Simetría apagada."); renderPanel(); break;
+    case "ground": { const fig = figs.get(o.id); groundFigure(fig); resolvePins(o, fig, null); o.pose = M.readPose(fig, o.pose); store.commit(); markDirty(); toast("Figura apoyada en el piso."); break; }
+    case "pin": {
+      const fig = figs.get(o.id); o.pins ??= {};
+      if (o.pins[val]) o.pins[val] = null; else pinHere(o, fig, val);
+      store.commit(); renderPanel(); markDirty(); break;
+    }
+    case "rings": ui.rings = !ui.rings; attachGizmo(); renderPanel(); markDirty(); break;
+    case "face-mode": o.face.mode = val; setFace(o); store.commit(); renderPanel(); break;
+    case "face-guides": o.face.guides = !o.face.guides; setFace(o); store.commit(); renderPanel(); break;
+    case "expr": {
+      const src = val.startsWith("mine:") ? savedExpr()[+val.slice(5)]?.expr : M.EXPRESSIONS[val];
+      if (!src) break;
+      o.face.expr = clone(src); delete o.face.expr.label; o.face.exprName = val;
+      if (o.face.mode !== "detallado" && !val.startsWith("neutral")) o.face.mode = "detallado";
+      setFace(o); store.commit(); renderPanel(); break;
+    }
+    case "expr-save": { const name = $("#exprname").value.trim() || `Expresión ${savedExpr().length + 1}`; const all = savedExpr(); all.push({ name, expr: clone(o.face.expr) }); writeExpr(all); o.face.exprName = "mine:" + (all.length - 1); ui.faceOpen = true; renderPanel(); toast("Expresión guardada en este dispositivo."); break; }
+    case "expr-del": { const all = savedExpr(); all.splice(+val, 1); writeExpr(all); ui.faceOpen = true; renderPanel(); break; }
     case "copy-pose": ui.clipboardPose = { pose: clone(o.pose), hands: { ...o.hands }, H: figs.get(o.id).d.H }; toast("Pose copiada. Selecciona otro personaje y pégala."); renderPanel(); break;
     case "paste-pose": {
       const cp = ui.clipboardPose, k = figs.get(o.id).d.H / cp.H;
@@ -801,13 +1023,19 @@ panel.addEventListener("input", e => {
   const o = selObj();
   if (out && el.type === "range") out.textContent = fmt(val, +el.step) + (out.textContent.match(/[^\d.\-]+$/)?.[0] || "");
   if (act === "joint-rot") {
-    const i = { jx: 0, jy: 1, jz: 2 }[key];
-    o.pose.rot[ui.joint] = o.pose.rot[ui.joint] || [0, 0, 0];
-    o.pose.rot[ui.joint][i] = val;
-    if (ui.joint === "neck" || ui.joint === "head") o.gaze = null;
+    const j = el.dataset.joint, i = +el.dataset.ax, refs = PSEUDO[j]?.joints || [j];
+    const raw = val * M.sideSign(refs[0], "xyz"[i]);
+    for (const k of refs) { o.pose.rot[k] = o.pose.rot[k] || [0, 0, 0]; o.pose.rot[k][i] = raw / refs.length; }
+    if (/^(neck|head)/.test(j)) o.gaze = null;
+    if (ui.sym && /_[LR]$/.test(j)) M.symmetrize(o.pose, j.slice(-1));
+    if (out) out.textContent = Math.round(val) + "°";
     M.applyPose(figs.get(o.id), o.pose, o.relaxed); markDirty();
+  } else if (act === "face") {
+    const [k, idx] = key.split(".");
+    if (idx !== undefined) o.face.expr[k][+idx] = val; else o.face.expr[k] = val;
+    o.face.exprName = null; setFace(o);
   } else if (act === "param") {
-    o.params[key] = val; rebuildObject(o); buildRuler(); markDirty();
+    o.params[key] = val; rebuildObject(o); groundFigure(figs.get(o.id)); o.pose = M.readPose(figs.get(o.id), o.pose); buildRuler(); markDirty();
   } else if (act === "lens") {
     store.v.camera.mm = val; $("#lens-o").textContent = val + " mm"; layoutFrame(); syncLensUI(); markDirty();
   } else if (act === "light") {
@@ -821,12 +1049,16 @@ panel.addEventListener("input", e => {
 panel.addEventListener("change", e => {
   const el = e.target, act = el.dataset.act, key = el.dataset.key; if (!act) return;
   const o = selObj(), v = store.v;
-  if (["joint-rot", "param", "lens", "light", "view-r"].includes(act)) { store.commit(); if (act === "param") renderPanel(); return; }
+  if (["joint-rot", "param", "lens", "light", "view-r", "face"].includes(act)) {
+    if (act === "joint-rot") o.pose = M.readPose(figs.get(o.id), o.pose);
+    store.commit(); if (act === "param") renderPanel(); return;
+  }
+  if (act === "anchor") { setAnchor(o, el.dataset.end, el.value); store.commit(); markDirty(3); return; }
   if (act === "view") { v.view[key] = el.checked; if (key === "grid") applyBackground(); if (key === "ruler") buildRuler(); store.commit(); markDirty(); return; }
   if (act === "ui") { if (key === "pin") ui.pinFeet = el.checked; return; }
   if (act === "fig") { o.relaxed = el.checked; M.applyPose(figs.get(o.id), o.pose, o.relaxed); store.commit(); renderPanel(); markDirty(); return; }
   if (act === "light-t") { const l = selLight(); l.shadow = el.checked; lights.get(l.id).light.castShadow = el.checked; store.commit(); markDirty(); return; }
-  if (act === "joint") { ui.joint = el.value || null; renderPanel(); return; }
+  if (act === "joint") { ui.joint = el.value || null; attachGizmo(); renderPanel(); markDirty(); return; }
   if (act === "rename") { if (o) { o.name = el.value.trim() || o.name; store.commit(); renderPanel(); } return; }
   if (act === "rename-light") { const l = selLight(); l.name = el.value.trim() || l.name; store.commit(); renderPanel(); return; }
   if (act === "num") {
@@ -876,9 +1108,9 @@ function applyPreset(k) {
 function savedPoses() { try { return JSON.parse(localStorage.getItem("arnes-poses") || "[]"); } catch { return []; } }
 function writePoses(a) { try { localStorage.setItem("arnes-poses", JSON.stringify(a)); } catch { toast("Este navegador no permite guardar poses aquí."); } }
 function savePose(name, o) {
-  const s = 1.75 / figs.get(o.id).d.H;
+  const k = 1.75 / figs.get(o.id).d.H;
   const all = savedPoses();
-  all.push({ name, pose: { rot: clone(o.pose.rot), hips: o.pose.hips.map(x => x * s) }, hands: { ...o.hands } });
+  all.push({ name, pose: { rot: clone(o.pose.rot), hips: o.pose.hips.map(x => x * k), body: o.pose.body || null }, hands: { ...o.hands } });
   writePoses(all);
 }
 
@@ -942,7 +1174,7 @@ $("#xfile").addEventListener("change", async e => {
   try {
     const p = JSON.parse(await f.text());
     if (!p.vinetas?.length) throw new Error("formato");
-    store.load(p); store.scheduleSave(); ui.sel = null; rebuildScene(); renderPanel();
+    store.load(migrate(p)); store.scheduleSave(); ui.sel = null; rebuildScene(); renderPanel();
     $("#xstatus").textContent = `Abierto: ${p.vinetas.length} viñeta${p.vinetas.length > 1 ? "s" : ""}.`;
   } catch { $("#xstatus").textContent = "Ese archivo no es un proyecto de Arnés."; }
   e.target.value = "";
@@ -1004,7 +1236,7 @@ function toast(msg) {
 }
 
 // Acceso para pruebas desde la consola
-window.__arnes = { store, ui, select, setPose, figs, selectTab, applyShot, camera, controls, rebuildScene, renderPanel, markDirty, POSE_LIBRARY, addFigure };
+window.__arnes = { store, ui, select, setPose, figs, selectTab, applyShot, camera, controls, rebuildScene, renderPanel, markDirty, POSE_LIBRARY, addFigure, M, pinHere, setAnchor, groundFigure, migrate };
 
 // ---------------------------------------------------------------- Arranque
 $("#hint").textContent = coarse ? "Un dedo: girar · Dos dedos: acercar y desplazar · Toca para elegir" : "Arrastrar: girar · Clic derecho: desplazar · Rueda: acercar · Clic: elegir";
@@ -1015,7 +1247,7 @@ async function start(hot = {}) {
   let project = hot.project || null;
   if (!project) { const saved = await store.readSaved(); if (saved) try { project = JSON.parse(saved); } catch { project = null; } }
   if (!project?.vinetas?.length) project = buildExample();
-  store.load(project);
+  store.load(migrate(project));
   ui.tab = hot.tab || "escena";
   for (const t of tabs) t.setAttribute("aria-selected", String(t.dataset.tab === ui.tab));
   rebuildScene(); resize(); renderPanel();
