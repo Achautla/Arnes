@@ -36,6 +36,26 @@ export async function signUp(email, password) {
 }
 export function signOut() { keep(null); }
 
+// Entrar con Facebook (o Google): Supabase devuelve la sesión en el # de la dirección al volver
+export function oauthUrl(provider) {
+  const back = location.origin + location.pathname;
+  return `${base()}/auth/v1/authorize?provider=${provider}&redirect_to=${encodeURIComponent(back)}`;
+}
+export async function consumeOAuth() {
+  const h = new URLSearchParams(location.hash.slice(1)), q = new URLSearchParams(location.search);
+  const err = h.get("error_description") || q.get("error_description") || h.get("error") || q.get("error");
+  if (!h.get("access_token") && !err) return null;
+  history.replaceState(null, "", location.pathname);
+  if (err) throw new Error(/email/i.test(err) ? "Facebook no compartió tu correo. Revisa los permisos de la app en Facebook e intenta de nuevo." : "No se pudo entrar con Facebook. Intenta de nuevo o entra con tu correo.");
+  const at = h.get("access_token");
+  const r = await fetch(base() + "/auth/v1/user", { headers: { apikey: CLOUD.anonKey, Authorization: "Bearer " + at } });
+  const u = await r.json().catch(() => ({}));
+  if (!r.ok || !u.id) throw new Error("No se pudo entrar con Facebook. Intenta de nuevo o entra con tu correo.");
+  const md = u.user_metadata || {};
+  keep({ access_token: at, refresh_token: h.get("refresh_token"), expires_at: Date.now() + (+h.get("expires_in") || 3600) * 1000, user: { id: u.id, email: u.email || md.full_name || md.name || "Cuenta de Facebook" } });
+  return user();
+}
+
 async function token() {
   if (!session) throw new Error("Sin sesión");
   if (Date.now() > session.expires_at - 60000) {

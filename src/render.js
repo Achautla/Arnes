@@ -12,10 +12,40 @@ uniform float near, far, thick;
 uniform int mode, tones;
 uniform vec4 th;
 uniform bool outline, blue, clearBg, useNormal, contourOnly;
-uniform float dotSize;
-uniform vec3 ink, blueInk;
+uniform float dotSize, hatch, grain, lineVar;
+uniform vec3 ink, blueInk, paper, sepia, burstA, burstB;
+uniform bool burst;
+uniform vec2 focus;
 float lin(float d){ float z = d * 2.0 - 1.0; return (2.0 * near * far) / (far + near - z * (far - near)); }
 vec3 toSRGB(vec3 c){ return pow(max(c, 0.0), vec3(1.0/2.2)); }
+float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y); }
+// Bordes a un radio dado: profundidad (silueta) y normales (pliegues y cambios de plano)
+float edgeAt(float r, float dc, out float sil){
+  vec2 o = r / res;
+  float dl = lin(texture2D(tDepth, vUv - vec2(o.x, 0.0)).x), dr = lin(texture2D(tDepth, vUv + vec2(o.x, 0.0)).x);
+  float dd = lin(texture2D(tDepth, vUv - vec2(0.0, o.y)).x), du = lin(texture2D(tDepth, vUv + vec2(0.0, o.y)).x);
+  float lap = (abs(dl + dr - 2.0 * dc) + abs(du + dd - 2.0 * dc)) / max(dc, 0.001);
+  sil = smoothstep(0.015, 0.04, lap);
+  vec3 nc = texture2D(tNormal, vUv).xyz;
+  float nd = max(max(distance(nc, texture2D(tNormal, vUv - vec2(o.x, 0.0)).xyz), distance(nc, texture2D(tNormal, vUv + vec2(o.x, 0.0)).xyz)),
+                 max(distance(nc, texture2D(tNormal, vUv - vec2(0.0, o.y)).xyz), distance(nc, texture2D(tNormal, vUv + vec2(0.0, o.y)).xyz)));
+  return max(sil, smoothstep(0.35, 0.6, nd));
+}
+// Una capa de rayado: líneas perpendiculares a 'a', que se curvan con la forma (normal) y tiemblan como trazo a mano
+float hatchLayer(vec2 px, vec3 n, float a, float s, float cover){
+  if (cover <= 0.0) return 0.0;
+  vec2 dir = vec2(cos(a), sin(a));
+  float c = dot(px, vec2(-dir.y, dir.x));
+  c += (n.x * 1.6 + n.y * 1.1) * s * 2.2;
+  c += (vnoise(px * 0.035) - 0.5) * s * 0.9;
+  float f = abs(fract(c / s) - 0.5) * s;
+  float w = s * clamp(cover, 0.0, 0.5) * (0.75 + 0.5 * vnoise(px * 0.11 + a));
+  // los trazos se cortan a tramos, como plumilla
+  float brk = smoothstep(0.18, 0.3, vnoise(vec2(dot(px, dir) * 0.045, floor(c / s) * 3.7)));
+  return (1.0 - smoothstep(w * 0.5, w * 0.5 + 0.9, f)) * brk;
+}
 float quant(float l){
   if (tones == 2) return l < th.x ? 0.0 : 1.0;
   if (tones == 3) return l < th.x ? 0.0 : (l < th.y ? 0.5 : 1.0);
@@ -52,10 +82,67 @@ void main(){
     else col = cLit;
     v = dot(col, vec3(0.333));
   }
+  else if (mode == 6 || mode == 7) {
+    // estilos de artista: se resuelven completos abajo
+  }
   else if (mode == 4) {
     float q = lum < th.x ? 0.28 : (lum < th.y ? 0.62 : 1.0);
     vec3 chroma = col / max(lum, 0.04);
     col = clamp(chroma * q, 0.0, 1.0); v = q;
+  }
+  if (mode == 6 || mode == 7) {
+    vec2 px = vUv * res;
+    vec3 n = texture2D(tNormal, vUv).xyz * 2.0 - 1.0;
+    bool sky = d >= 0.99999;
+    float L = clamp(pow(lum, 0.62) + (0.33 - th.x) * 1.2, 0.0, 1.0);
+    float dc = lin(d), sil;
+    // la línea engorda en la sombra y en la silueta, y respira con el pulso de la mano
+    float wob = 0.75 + 0.5 * vnoise(px * 0.02);
+    float r = thick * (1.0 + lineVar * (1.0 - L) * 1.2) * mix(1.0, wob, lineVar);
+    float eIn = edgeAt(r, dc, sil);
+    float eOut = 0.0; edgeAt(r * (1.0 + lineVar * 1.3), dc, eOut);
+    float line = max(eIn * (outline ? 1.0 : 0.0), eOut);
+    if (mode == 6) {
+      // Grabado sepia: papel envejecido, plumilla con rayado cruzado y negros sólidos
+      float g = vnoise(px * 0.9) * 0.5 + vnoise(px * 0.08) * 0.5;
+      float vig = smoothstep(1.25, 0.35, length((vUv - 0.5) * vec2(1.0, 1.15)) * 1.6);
+      vec3 pap = paper * (1.0 - grain * 0.16 * g) * mix(0.72, 1.0, vig);
+      float s = hatch;
+      float cov = 0.0;
+      cov = max(cov, hatchLayer(px, n, 0.785, s, (0.74 - L) * 1.1));
+      cov = max(cov, hatchLayer(px, n, -0.62, s * 0.92, (0.5 - L) * 1.3));
+      cov = max(cov, hatchLayer(px, n, 0.12, s * 0.8, (0.3 - L) * 1.6));
+      float solid = smoothstep(0.12, 0.06, L);
+      cov = max(cov, solid);
+      if (sky) cov *= 0.85;
+      float inkV = max(cov, line);
+      inkV *= 0.82 + 0.18 * vnoise(px * 0.6);
+      col = mix(pap, sepia, clamp(inkV, 0.0, 1.0));
+      v = 1.0 - inkV;
+    } else {
+      // Color dinámico: color plano saturado, negros de sombra, luz de contorno y fondo de estallido
+      vec3 base = mix(vec3(lum), col, 1.35);
+      vec3 chroma = clamp(base / max(lum, 0.05), 0.0, 1.6);
+      float spot = th.x * 0.6;
+      vec3 c;
+      if (L < spot) c = ink;
+      else if (L < th.x + 0.18) c = mix(chroma * 0.55, vec3(0.22, 0.26, 0.45), 0.35);
+      else c = chroma * 0.98;
+      float rim = smoothstep(0.42, 0.12, abs(n.z)) * step(spot, L);
+      c = mix(c, vec3(1.0, 0.86, 0.62), rim * 0.55);
+      if (sky && burst) {
+        vec2 q = (vUv - focus) * vec2(res.x / res.y, 1.0);
+        float ang = atan(q.y, q.x), rad = length(q);
+        float k = ang * 9.549;
+        float ray = step(0.45 + 0.25 * hash(vec2(floor(k), 1.0)), fract(k + vnoise(vec2(rad * 3.0, floor(k))) * 0.3));
+        c = mix(burstA, burstB, smoothstep(0.05, 0.9, rad));
+        c = mix(c, c * 1.18 + 0.05, ray * smoothstep(0.02, 0.25, rad));
+      } else if (sky) c = col;
+      col = mix(clamp(c, 0.0, 1.0), ink, line);
+      v = dot(col, vec3(0.333));
+    }
+    gl_FragColor = vec4(col, (clearBg && sky) ? line : 1.0);
+    return;
   }
   float e = 0.0;
   if (outline) {
@@ -88,8 +175,15 @@ void main(){
 }`;
 
 // Modos de semirender ("arcilla" y "color" no cuantizan)
-export const MODE_INDEX = { clay: 0, color: 0, values: 1, noir: 2, manga: 3, cel: 4, luz: 5 };
-export const MODES = { clay: "Arcilla", color: "Color", values: "Valores", noir: "Noir", manga: "Manga", cel: "Cel", luz: "Notas de luz" };
+export const MODE_INDEX = { clay: 0, color: 0, values: 1, noir: 2, manga: 3, cel: 4, luz: 5, grabado: 6, dinamico: 7 };
+export const MODES = { clay: "Arcilla", color: "Color", values: "Valores", noir: "Noir", manga: "Manga", cel: "Cel", luz: "Notas de luz", grabado: "Grabado sepia", dinamico: "Color dinámico" };
+// Estilos de artista: parámetros que viajan con el perfil. Los dos de base salen de las referencias de Brayand
+// (sus páginas de The Elder's Apprentice y los reels de viñeta animada).
+export const STYLE_KEYS = ["mode", "th", "thick", "outline", "hatch", "grain", "lineVar", "paper", "sepia", "burst", "burstA", "burstB", "dot", "tones", "background"];
+export const BASE_STYLES = [
+  { name: "Grabado sepia · Brayand", base: true, view: { mode: "grabado", th: 0.5, thick: 1.1, outline: true, hatch: 5, grain: 0.6, lineVar: 0.7, paper: "#e6d3ae", sepia: "#2a1d12", background: "papel" } },
+  { name: "Color dinámico", base: true, view: { mode: "dinamico", th: 0.45, thick: 1.75, outline: true, lineVar: 0.6, burst: true, burstA: "#ffb36b", burstB: "#d23c35" } },
+];
 export const LIGHT_NOTES = [["Zona iluminada", "#f5e3b5"], ["Terminador", "#db8c3a"], ["Sombra propia", "#5e80a8"], ["Sombra proyectada", "#4a3d6b"], ["Luz reflejada", "#5fa8a0"], ["Sin luz directa", "#8c8c91"]];
 
 // Para las notas de luz: N·L de la luz principal y la normal hacia arriba, por píxel
@@ -118,6 +212,8 @@ export class Composer {
         thick: { value: 1.5 }, mode: { value: 0 }, dotSize: { value: 7 }, tones: { value: 3 }, th: { value: new THREE.Vector4(0.2, 0.45, 0.65, 0.85) },
         outline: { value: false }, contourOnly: { value: false }, blue: { value: false }, clearBg: { value: false }, useNormal: { value: true },
         ink: { value: new THREE.Color(0.11, 0.11, 0.12) }, blueInk: { value: new THREE.Color(0.25, 0.55, 0.85) },
+        hatch: { value: 5 }, grain: { value: 0.6 }, lineVar: { value: 0.7 }, paper: { value: new THREE.Color("#e6d3ae") }, sepia: { value: new THREE.Color("#2a1d12") },
+        burst: { value: true }, burstA: { value: new THREE.Color("#ffb36b") }, burstB: { value: new THREE.Color("#d23c35") }, focus: { value: new THREE.Vector2(0.5, 0.55) },
       },
     });
     this.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.mat);
@@ -142,7 +238,8 @@ export class Composer {
     const rt = opts.rt || this.rt, nrt = opts.nrt || this.nrt;
     if (view.mode === "luz") this.lightNotes(scene, camera, rt, opts);
     else { r.setRenderTarget(rt); r.render(scene, camera); }
-    const wantN = view.outline || opts.blue;
+    const artist = view.mode === "grabado" || view.mode === "dinamico";
+    const wantN = view.outline || opts.blue || artist;
     if (wantN) {
       const bg = scene.background, fog = scene.fog;
       scene.overrideMaterial = this.normalMat; scene.background = null; scene.fog = null;
@@ -165,6 +262,11 @@ export class Composer {
     u.blue.value = !!opts.blue;
     u.contourOnly.value = !!view.contourOnly;
     u.clearBg.value = !!opts.clearBg;
+    u.hatch.value = (view.hatch || 5) * (opts.scale || 1);
+    u.grain.value = view.grain ?? 0.6; u.lineVar.value = view.lineVar ?? 0.6;
+    u.paper.value.set(view.paper || "#e6d3ae"); u.sepia.value.set(view.sepia || "#2a1d12");
+    u.burst.value = view.burst !== false; u.burstA.value.set(view.burstA || "#ffb36b"); u.burstB.value.set(view.burstB || "#d23c35");
+    if (view.mode === "dinamico") u.ink.value.setRGB(0.05, 0.04, 0.06); else u.ink.value.setRGB(0.11, 0.11, 0.12);
     r.setRenderTarget(opts.target || null);
     r.render(this.qScene, this.qCam);
   }
@@ -204,7 +306,7 @@ Composer.prototype.lightNotes = function (scene, camera, rt, opts) {
 
 export function thresholds(view) {
   const m = view.mode;
-  const t = m === "noir" || m === "manga" ? 2 : m === "cel" ? 3 : view.tones || 3, k = view.th ?? 0.5;
+  const t = m === "noir" || m === "manga" ? 2 : m === "cel" || m === "grabado" || m === "dinamico" ? 3 : view.tones || 3, k = view.th ?? 0.5;
   const shift = (k - 0.5) * 0.4;
   const base = t === 2 ? [0.5, 1, 1, 1] : t === 3 ? [0.33, 0.66, 1, 1] : [0.2, 0.4, 0.6, 0.8];
   if (m === "noir") base[0] = 0.32;

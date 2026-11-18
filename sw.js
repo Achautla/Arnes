@@ -1,5 +1,5 @@
 // Funcionamiento sin conexión: guarda la app y el motor 3D la primera vez que se abren
-const CACHE = "arnes-v10";
+const CACHE = "arnes-v11";
 const CORE = ["./", "index.html", "styles.css", "manifest.webmanifest", "icon.svg",
   "src/main.js", "src/util.js", "src/mannequin.js", "src/poses.js", "src/props.js", "src/lights.js", "src/render.js", "src/store.js", "src/example.js",
   "src/props2.js", "src/scenes.js", "src/scenarios.js", "src/page.js", "src/home.js", "src/cloud.js", "src/cloud-config.js", "src/cloth.js", "src/share.js", "src/accessories.js", "src/contact.js"];

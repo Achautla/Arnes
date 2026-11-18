@@ -7,7 +7,7 @@ import * as M from "./mannequin.js";
 import { POSE_LIBRARY, POSE_CATS } from "./poses.js";
 import { PRIMITIVES, PROPS, EXTRA_PROPS, TERRAIN, TERRAIN_TYPES, ALL_PROPS, buildProp } from "./props.js";
 import { LIGHT_TYPES, newLight, buildLight, buildLightIcon, presetNoir, presetDay, presetSunset, presetMoon, presetNeon, presetFire, presetBacklight, presetUnder, presetBlinds, PRESETS, GOBOS } from "./lights.js";
-import { Composer, renderToBlob, MODES, LIGHT_NOTES } from "./render.js";
+import { Composer, renderToBlob, MODES, LIGHT_NOTES, STYLE_KEYS, BASE_STYLES } from "./render.js";
 import { applyAtmosphere, aspectOf, sceneFor, disposeScene } from "./scenes.js";
 import { SCENARIOS } from "./scenarios.js";
 import { createPageEditor, styleView, FORMATS } from "./page.js";
@@ -198,7 +198,7 @@ function applyBackground() {
   floor.visible = v.floor !== false && !terrain;
 }
 function repaintAll() {
-  const useColor = store.v.view.mode !== "clay";
+  const useColor = !["clay", "grabado"].includes(store.v.view.mode);
   for (const f of figs.values()) { f.dress?.setStyle({ color: useColor, map: !!store.v.view.tension }); f.acc?.setStyle(useColor); }
   for (const o of store.v.objects) { const g = world.get(o.id); if (g) paint(g, o.color || null, useColor); }
 }
@@ -1013,6 +1013,8 @@ $("#drill-pause").addEventListener("click", () => { if (drill) { drill.paused = 
 $("#drill-end").addEventListener("click", () => endDrill(false));
 $("#drill-keep").addEventListener("click", () => endDrill(false, true));
 
+function savedStyles() { try { return JSON.parse(localStorage.getItem("arnes-styles") || "[]"); } catch { return []; } }
+function writeStyles(a) { try { localStorage.setItem("arnes-styles", JSON.stringify(a)); } catch { toast("Este navegador no permite guardar estilos aquí."); } syncProfile(); }
 function savedChars() { try { return JSON.parse(localStorage.getItem("arnes-chars") || "[]"); } catch { return []; } }
 function writeChars(a) { try { localStorage.setItem("arnes-chars", JSON.stringify(a)); } catch { toast("Este navegador no permite guardar personajes aquí."); } syncProfile(); }
 const CHAR_KEYS = ["params", "face", "clothes", "hair", "accessories", "color", "hands"];
@@ -1181,14 +1183,25 @@ function panelLuz() {
     <div class="row"><button class="btn" data-act="fwd">Copiar a viñetas siguientes</button><button class="btn danger" data-act="del">Borrar luz</button></div></div>`;
   }
   h += `<h2>Semirender</h2><div class="pills">${Object.entries(MODES).map(([k, l]) => pill(k, v.mode, l, "mode")).join("")}</div>`;
-  const tips = { clay: "Volumen gris, sin color.", color: "Usa el color que le diste a cada objeto.", values: "Agrupa la luz en 2, 3 o 5 tonos.", noir: "Solo negro y blanco: decide dónde van las masas de negro.", manga: "Medios tonos como tramas de puntos.", cel: "Color plano en tres tonos.", luz: "Cómo cae la luz principal sobre cada forma: así se decide dónde va cada tono al dibujar." };
+  const tips = { clay: "Volumen gris, sin color.", color: "Usa el color que le diste a cada objeto.", values: "Agrupa la luz en 2, 3 o 5 tonos.", noir: "Solo negro y blanco: decide dónde van las masas de negro.", manga: "Medios tonos como tramas de puntos.", cel: "Color plano en tres tonos.", grabado: "Plumilla sobre papel envejecido: rayado cruzado que sigue la forma, negros sólidos y línea que engorda en la sombra. Sale de tus páginas de The Elder's Apprentice.", dinamico: "Color plano saturado, negros de sombra, luz de contorno y cielo de estallido, como los reels de viñeta animada.", luz: "Cómo cae la luz principal sobre cada forma: así se decide dónde va cada tono al dibujar." };
   h += `<p class="sub">${tips[v.mode] || ""}</p>`;
+  const mine = savedStyles();
+  h += `<h3>Estilos de artista</h3><div class="olist">${[...BASE_STYLES, ...mine].map((st, i) => `<button class="oitem" data-act="style-apply" data-val="${i}"><span>${esc(st.name)}</span><small>${MODES[st.view.mode] || ""}${st.base ? " · de base" : " · tuyo"}</small></button>`).join("")}</div>
+  ${mine.length ? `<div class="pills"><span class="pl">Borrar</span>${mine.map((st, i) => `<button class="pill" data-act="style-del" data-val="${i}">${esc(st.name)} ×</button>`).join("")}</div>` : ""}
+  <div class="row"><input class="text" id="stylename" placeholder="Nombre del estilo" aria-label="Nombre del estilo"><button class="btn" data-act="style-save">Guardar este estilo</button></div>
+  <p class="sub">Tus estilos viajan con tu cuenta. Puedes tener varios y aplicarlos a cualquier viñeta.</p>`;
   if (v.mode === "luz") h += `<ul class="legend">${LIGHT_NOTES.map(([l, c]) => `<li><i style="background:${c}"></i>${l}</li>`).join("")}</ul>
     <p class="sub">El terminador es la frontera entre luz y sombra propia: ahí la forma gira y el tono cambia más rápido. La luz reflejada es la que rebota del piso en la sombra.</p>`;
   if (v.mode === "values") h += `<div class="pills"><span class="pl">Tonos</span>${[2, 3, 5].map(n => pill(String(n), String(v.tones), String(n), "tones")).join("")}</div>`;
   if (!["clay", "color", "luz"].includes(v.mode)) h += slider("th", "Umbral (más luz ↔ más sombra)", v.th, 0, 1, 0.05, "", "view-r");
+  const artist = v.mode === "grabado" || v.mode === "dinamico";
+  if (artist) h += slider("lineVar", "Variación de la línea (pareja ↔ viva)", v.lineVar ?? 0.6, 0, 1, 0.05, "", "view-r");
+  if (v.mode === "grabado") h += slider("hatch", "Separación del rayado", v.hatch || 5, 3, 12, 0.5, " px", "view-r") + slider("grain", "Grano y envejecido del papel", v.grain ?? 0.6, 0, 1, 0.05, "", "view-r")
+    + `<div class="row colorrow"><label class="sel"><span>Papel</span><input type="color" data-act="view-color" data-key="paper" value="${v.paper || "#e6d3ae"}"></label><label class="sel"><span>Tinta</span><input type="color" data-act="view-color" data-key="sepia" value="${v.sepia || "#2a1d12"}"></label></div>`;
+  if (v.mode === "dinamico") h += `<div class="toggles">${toggle("burst", "Cielo de estallido", "Rayos desde el centro de la viñeta", v.burst !== false)}</div>`
+    + (v.burst !== false ? `<div class="row colorrow"><label class="sel"><span>Centro</span><input type="color" data-act="view-color" data-key="burstA" value="${v.burstA || "#ffb36b"}"></label><label class="sel"><span>Orilla</span><input type="color" data-act="view-color" data-key="burstB" value="${v.burstB || "#d23c35"}"></label></div>` : "");
   if (v.mode === "manga") h += slider("dot", "Tamaño de la trama", v.dot || 7, 3, 16, 1, " px", "view-r");
-  h += `<div class="toggles">${toggle("outline", "Contorno", "Silueta y bordes marcados", v.outline)}</div>`;
+  h += `<div class="toggles">${toggle("outline", artist ? "Línea interior" : "Contorno", artist ? "Pliegues y cambios de plano; la silueta siempre se entinta" : "Silueta y bordes marcados", v.outline)}</div>`;
   if (v.outline) h += slider("thick", "Grosor del contorno", v.thick, 0.5, 4, 0.25, " px", "view-r");
   h += `<h3>Fondo y atmósfera</h3><div class="pills">${pill("papel", v.background, "Papel", "bg")}${pill("oscuro", v.background, "Oscuro", "bg")}</div>
   ${slider("fog", "Niebla o humo (separa los planos)", v.fog || 0, 0, 1, 0.05, "", "fog")}
@@ -1356,6 +1369,13 @@ panel.addEventListener("click", e => {
     case "preset": applyPreset(val); break;
     case "add-light": { const l = newLight(val); const t = controls.target; if (val !== "sol") l.pos = [round(t.x + 0.6, 2), round(t.y + 0.9, 2), round(t.z + 0.6, 2)]; v.lights.push(l); rebuildLights(); store.commit(); select(l.id); break; }
     case "mode": v.view.mode = val; repaintAll(); store.commit(); renderPanel(); markDirty(); break;
+    case "style-apply": { const st = [...BASE_STYLES, ...savedStyles()][+val]; if (!st) break; Object.assign(v.view, clone(st.view)); applyBackground(); repaintAll(); store.commit(); renderPanel(); markDirty(); toast(`Estilo «${st.name}» aplicado a esta viñeta.`); break; }
+    case "style-save": {
+      const name = ($("#stylename")?.value || "").trim() || `Mi estilo ${savedStyles().length + 1}`;
+      const view = {}; for (const k of STYLE_KEYS) if (v.view[k] !== undefined) view[k] = clone(v.view[k]);
+      const list = savedStyles().filter(x => x.name !== name); list.push({ name, view }); writeStyles(list); renderPanel(); toast(`Se guardó «${name}» en tus estilos.`); break;
+    }
+    case "style-del": { const list = savedStyles(); const [st] = list.splice(+val, 1); writeStyles(list); renderPanel(); if (st) toast(`Se borró «${st.name}».`); break; }
     case "tones": v.view.tones = +val; store.commit(); renderPanel(); markDirty(); break;
     case "bg": v.view.background = val; applyBackground(); store.commit(); renderPanel(); markDirty(); break;
   }
@@ -1421,7 +1441,10 @@ panel.addEventListener("change", e => {
     if (key === "ruler") buildRuler();
     if (key === "forms") rebuildScene();
     if (key === "tension") repaintAll();
+    if (key === "burst") renderPanel();
     store.commit(); markDirty(); return;
+  }
+  if (act === "view-color") { v.view[key] = el.value; store.commit(); markDirty(); return;
   }
   if (act === "ui") { if (key === "pin") ui.pinFeet = el.checked; return; }
   if (act === "fig") { o.relaxed = el.checked; M.applyPose(figs.get(o.id), o.pose, o.relaxed); store.commit(); renderPanel(); markDirty(); return; }
@@ -1481,7 +1504,7 @@ let profTimer = 0;
 function syncProfile() {
   if (!cloud.user()) return;
   clearTimeout(profTimer);
-  profTimer = setTimeout(() => cloud.pushProfile({ expr: savedExpr(), poses: savedPoses(), chars: savedChars() }).catch(() => {}), 1500);
+  profTimer = setTimeout(() => cloud.pushProfile({ expr: savedExpr(), poses: savedPoses(), chars: savedChars(), styles: savedStyles() }).catch(() => {}), 1500);
 }
 async function mergeProfile() {
   if (!cloud.user()) return;
@@ -1491,7 +1514,8 @@ async function mergeProfile() {
     localStorage.setItem("arnes-expr", JSON.stringify(union(savedExpr(), d.expr)));
     localStorage.setItem("arnes-poses", JSON.stringify(union(savedPoses(), d.poses)));
     localStorage.setItem("arnes-chars", JSON.stringify(union(savedChars(), d.chars)));
-    await cloud.pushProfile({ expr: savedExpr(), poses: savedPoses(), chars: savedChars() });
+    localStorage.setItem("arnes-styles", JSON.stringify(union(savedStyles(), d.styles)));
+    await cloud.pushProfile({ expr: savedExpr(), poses: savedPoses(), chars: savedChars(), styles: savedStyles() });
   } catch {}
 }
 function savePose(name, o) {
@@ -1753,8 +1777,13 @@ async function start(hot = {}) {
     try { const p = await share.decode(location.hash.slice(5)); openViewer(p); return; }
     catch { toast("Ese enlace está incompleto o dañado. Pide que te lo vuelvan a enviar."); }
   }
+  let note = "";
+  if (cloud.configured()) {
+    try { if (await cloud.consumeOAuth()) { mergeProfile(); toast("Entraste con Facebook."); } }
+    catch (e) { note = e.message; }
+  }
   await store.list(); // migra el guardado de versiones anteriores
-  home.show();
+  home.show(note);
   document.body.classList.add("ready");
 }
 // Vista de solo lectura (enlace compartido): nada se guarda hasta que el visitante guarda una copia

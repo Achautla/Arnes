@@ -9,9 +9,11 @@ export function createHome({ store, onOpen, makeExample, makeBlank, onLogin }) {
   let screen = "projects", busy = false, msg = "", confirmDel = null, remote = [], lastEmail = "";
   const skipped = () => sessionStorage.getItem("arnes-offline") === "1";
 
-  async function show() {
+  async function show(note = "") {
+    if (note) msg = note;
     el.hidden = false; document.body.classList.add("home-open");
     screen = cloud.configured() && !cloud.user() && !skipped() ? "login" : "projects";
+    if (note && !cloud.user() && cloud.configured()) screen = "login";
     await draw();
   }
   function hide() { el.hidden = true; document.body.classList.remove("home-open"); }
@@ -35,6 +37,7 @@ export function createHome({ store, onOpen, makeExample, makeBlank, onLogin }) {
           <p class="hmsg" role="status">${esc(msg)}</p>
           <div class="row"><button class="btn accent" type="submit" data-h="in" ${busy ? "disabled" : ""}>Entrar</button><button class="btn" type="button" data-h="up" ${busy ? "disabled" : ""}>Crear cuenta</button></div>
         </form>
+        <div class="oauth"><span class="sub">o</span><button class="btn fb" data-h="fb" ${busy ? "disabled" : ""}><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M13.5 21v-7.5h2.5l.4-3h-2.9V8.6c0-.9.3-1.5 1.5-1.5H16.6V4.4c-.3 0-1.2-.1-2.3-.1-2.3 0-3.8 1.4-3.8 3.9v2.3H8v3h2.5V21z"/></svg>Entrar con Facebook</button></div>
         <button class="linkbtn" data-h="offline">Usar sin cuenta, solo en este dispositivo</button></div>`;
       return;
     }
@@ -77,6 +80,7 @@ export function createHome({ store, onOpen, makeExample, makeBlank, onLogin }) {
         if (!u) { msg = "Te enviamos un correo para confirmar la cuenta. Ábrelo y luego entra aquí."; return draw(); }
         screen = "projects"; onLogin?.(); return draw();
       }
+      if (a === "fb") { busy = true; draw(); location.href = cloud.oauthUrl("facebook"); return; }
       if (a === "offline") { sessionStorage.setItem("arnes-offline", "1"); screen = "projects"; return draw(); }
       if (a === "login") { screen = "login"; return draw(); }
       if (a === "out") { cloud.signOut(); remote = []; return draw(); }

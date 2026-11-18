@@ -2,6 +2,13 @@
 
 Storyboard 3D para cómic: posar personajes, colocar cámaras y luces, y obtener un semirender (volumen, sombras y valores) para dibujar a lápiz.
 
+## Fase 4 · primera entrega: estilos de artista (18-nov)
+
+- **Grabado sepia · Brayand:** sale de las páginas de *The Elder's Apprentice*. Papel envejecido con grano y viñeteado, plumilla con rayado cruzado que se curva con la forma, negros sólidos y línea que engorda en la sombra.
+- **Color dinámico:** sale de los reels de viñeta animada. Color plano saturado, manchas de negro, luz de contorno y cielo de estallido con dos colores.
+- **Mis estilos:** guarda los parámetros de la viñeta como estilo propio. Cada perfil tiene varios y viajan con la cuenta.
+- **Entrar con Facebook** en la pantalla de inicio (requiere el proveedor activo en Supabase).
+
 ## Fase 3 · entrega 9 y contactos (18-nov)
 
 - **Biblioteca de poses:** 85 poses en 10 categorías (de pie, moverse, sentado, suelo, acción, combate, interacción, gestos, con objetos, páginas), con filtro por categoría.
