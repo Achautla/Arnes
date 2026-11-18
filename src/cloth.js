@@ -6,6 +6,7 @@
 // - Los pliegues salen de la compresión de la tela: donde se encoge, se forman crestas.
 import * as THREE from "three";
 import { readJoint } from "./mannequin.js";
+import { pushOut, toLocal } from "./contact.js";
 
 export const MATERIALS = {
   rigido: { label: "Rígida (lana, mezclilla)", lambda: 0.075, amp: 0.02, bend: 0.55, folds: 6, gain: 5.0 },
@@ -596,7 +597,7 @@ export function dress(fig, clothes, opts = {}) {
     }
     return { P: P.slice(), nrm, grid, cell };
   }
-  function pushOut(arr, i, surfs, thick) {
+  function pushSurf(arr, i, surfs, thick) {
     for (const S of surfs) {
       const x = arr[i], y = arr[i + 1], z = arr[i + 2], gx = Math.floor(x / S.cell), gy = Math.floor(y / S.cell), gz = Math.floor(z / S.cell);
       let best = -1, bd = 0.0025;
@@ -610,7 +611,34 @@ export function dress(fig, clothes, opts = {}) {
       if (dist < thick) { const k = thick - dist; arr[i] += nx * k; arr[i + 1] += ny * k; arr[i + 2] += nz * k; }
     }
   }
-  function simulate(p, steps, reset, caps, floorY, windV, surfs = []) {
+  // la tela no se cruza consigo misma: partículas lejanas en la malla que quedan muy juntas se separan
+  function selfCollide(p, pin) {
+    const N = p.rows * p.cols, C = p.cols, cell = 0.016, d0 = 0.013, grid = new Map(), P = p.cur;
+    for (let i = pin; i < N; i++) {
+      const key = Math.floor(P[i * 3] / cell) + "," + Math.floor(P[i * 3 + 1] / cell) + "," + Math.floor(P[i * 3 + 2] / cell);
+      (grid.get(key) || grid.set(key, []).get(key)).push(i);
+    }
+    for (let i = pin; i < N; i++) {
+      const ri = Math.floor(i / C), ci = i % C, gx = Math.floor(P[i * 3] / cell), gy = Math.floor(P[i * 3 + 1] / cell), gz = Math.floor(P[i * 3 + 2] / cell);
+      for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let c = -1; c <= 1; c++) {
+        const list = grid.get((gx + a) + "," + (gy + b) + "," + (gz + c)); if (!list) continue;
+        for (const j of list) {
+          if (j <= i) continue;
+          const rj = Math.floor(j / C), cj = j % C;
+          let dc = Math.abs(ci - cj); if (p.closed) dc = Math.min(dc, C - dc);
+          if (Math.abs(ri - rj) <= 2 && dc <= 2) continue; // vecinos en la malla: ya los cuidan las restricciones
+          const dx = P[j * 3] - P[i * 3], dy = P[j * 3 + 1] - P[i * 3 + 1], dz = P[j * 3 + 2] - P[i * 3 + 2], dd = dx * dx + dy * dy + dz * dz;
+          if (dd < d0 * d0 && dd > 1e-12) {
+            const d = Math.sqrt(dd), k = (d0 - d) / d * 0.5;
+            P[i * 3] -= dx * k; P[i * 3 + 1] -= dy * k; P[i * 3 + 2] -= dz * k;
+            P[j * 3] += dx * k; P[j * 3 + 1] += dy * k; P[j * 3 + 2] += dz * k;
+          }
+        }
+      }
+    }
+  }
+  const _q = new THREE.Vector3();
+  function simulate(p, steps, reset, caps, floorY, windV, surfs = [], obsL = null) {
     const N = p.rows * p.cols, C = p.cols, pin = p.pinRows * C, dt = 1 / 60, g = 9.8 * dt * dt;
     skinTo(p, p.target);
     if (reset) { p.cur.set(p.target); p.prev.set(p.target); }
@@ -640,7 +668,14 @@ export function dress(fig, clothes, opts = {}) {
           // fricción: la tela apoyada en el cuerpo casi no resbala
           const k = i * 3; p.prev[k] += (p.cur[k] - p.prev[k]) * 0.7; p.prev[k + 1] += (p.cur[k + 1] - p.prev[k + 1]) * 0.7; p.prev[k + 2] += (p.cur[k + 2] - p.prev[k + 2]) * 0.7;
         }
-        if (surfs.length && it === iters - 1) for (let i = pin; i < N; i++) pushOut(p.cur, i * 3, surfs, 0.011);
+        if (surfs.length && it === iters - 1) for (let i = pin; i < N; i++) pushSurf(p.cur, i * 3, surfs, 0.011);
+        if (it === iters - 1) {
+          if (obsL && (obsL.boxes.length || obsL.caps.length)) for (let i = pin; i < N; i++) {
+            const k = i * 3; _q.set(p.cur[k], p.cur[k + 1], p.cur[k + 2]);
+            if (pushOut(_q, obsL, -Infinity, 0.006)) { p.cur[k] = _q.x; p.cur[k + 1] = _q.y; p.cur[k + 2] = _q.z; p.prev[k] += (_q.x - p.prev[k]) * 0.7; p.prev[k + 1] += (_q.y - p.prev[k + 1]) * 0.7; p.prev[k + 2] += (_q.z - p.prev[k + 2]) * 0.7; }
+          }
+          if (s % 2 === 0 || s === steps - 1) selfCollide(p, pin);
+        }
       }
       // fricción con el piso: la tela que toca el suelo se queda quieta
       for (let i = pin; i < N; i++) if (p.cur[i * 3 + 1] <= floorY + 1e-4) { p.prev[i * 3] = p.cur[i * 3]; p.prev[i * 3 + 2] = p.cur[i * 3 + 2]; }
@@ -774,6 +809,7 @@ export function dress(fig, clothes, opts = {}) {
     skinMatrices();
     const caps = colliders(0.012), floorY = floorLocal();
     handle.caps = caps;
+    const obsL = opts.obstacles ? toLocal(opts.obstacles(), rootInv) : null;
     const ry = -fig.root.rotation.y, wa = windDir * Math.PI / 180;
     const windV = new THREE.Vector3(Math.sin(wa), 0.15, Math.cos(wa)).applyAxisAngle(new THREE.Vector3(0, 1, 0), ry).multiplyScalar(wind * 9);
     const surfs = [];
@@ -783,8 +819,12 @@ export function dress(fig, clothes, opts = {}) {
       const layer = GARMENTS[g.type]?.layer || 0, capsL = layer > 2 ? caps.map(([a, b, r]) => [a, b, r + 0.004 * (layer - 2)]) : caps;
       const mine = [];
       for (const p of parts) {
-        if (p.kind === "sheet") { simulate(p, mode === "settle" ? Qs.steps : 4, mode === "settle" || !p.started, capsL, floorY, windV, g.hair ? [] : surfs); p.started = true; mine.push(p); }
-        else skinTo(p, p.pos);
+        if (p.kind === "sheet") { simulate(p, mode === "settle" ? Qs.steps : 4, mode === "settle" || !p.started, capsL, floorY, windV, g.hair ? [] : surfs, obsL); p.started = true; mine.push(p); }
+        else {
+          skinTo(p, p.pos);
+          // la ropa ceñida también se aplana contra muebles, el piso y otros cuerpos (el pantalón en el asiento)
+          if (obsL) { const P = p.pos; for (let i = 0; i < P.length; i += 3) { _q.set(P[i], P[i + 1], P[i + 2]); if (pushOut(_q, obsL, floorY, 0.003)) { P[i] = _q.x; P[i + 1] = _q.y; P[i + 2] = _q.z; } } }
+        }
         const twist = p.name.startsWith("manga") ? Math.sign(readJoint(fig, "elbow_" + p.name.slice(-1))[1]) * Math.min(3, Math.abs(readJoint(fig, "elbow_" + p.name.slice(-1))[1]) / 25) : 0;
         foldsOn(p, M, twist);
         p.geo.attributes.position.needsUpdate = true; p.geo.computeVertexNormals(); p.geo.computeBoundingSphere();
@@ -811,7 +851,7 @@ export function dress(fig, clothes, opts = {}) {
   }
   function setWind(w, dir) { wind = w; windDir = dir; update("settle"); }
   function dispose() { for (const m of hidden) m.visible = true; for (const r of rigids) { r.mesh.parent?.remove(r.mesh); r.mesh.geometry.dispose(); } fig.root.remove(group); for (const { parts } of garments) for (const p of parts) p.geo.dispose(); }
-  const handle = { group, update, tick, setStyle, setWind, dispose, labels: () => labels, garments };
+  const handle = { group, update, tick, setStyle, setWind, dispose, labels: () => labels, garments, touch: () => { settled = false; changedAt = performance.now(); } };
   update("settle");
   return handle;
 }

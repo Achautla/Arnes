@@ -254,3 +254,8 @@ body.viewer nav#tabs button[data-tab="escena"], body.viewer nav#tabs button[data
 body.viewer nav#tabs { grid-template-columns: repeat(2, 1fr); }
 #xshare-url { flex: 1; min-width: 0; }
 body.viewer .pv-wrap { padding-top: 66px; }
+#drill { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 9; display: grid; justify-items: center; gap: 4px; padding: 10px 14px; background: rgba(27,27,27,.9); border: 1px solid var(--line); border-radius: 12px; max-width: calc(100% - 16px); }
+#drill-t { font: 700 34px var(--mono); color: var(--ink); line-height: 1; }
+#drill.urgent #drill-t { color: #e0a33a; }
+#drill-n { font-size: 13px; color: var(--muted); text-align: center; }
+body.drilling #tbar, body.drilling .hud { display: none !important; }

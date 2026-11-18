@@ -4,7 +4,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { DEG, RAD, clamp, uid, clone, round, escapeHtml as esc, saveFile, kelvinToColor as kelvinColor, paint } from "./util.js";
 import * as M from "./mannequin.js";
-import { POSE_LIBRARY } from "./poses.js";
+import { POSE_LIBRARY, POSE_CATS } from "./poses.js";
 import { PRIMITIVES, PROPS, EXTRA_PROPS, TERRAIN, TERRAIN_TYPES, ALL_PROPS, buildProp } from "./props.js";
 import { LIGHT_TYPES, newLight, buildLight, buildLightIcon, presetNoir, presetDay, presetSunset, presetMoon, presetNeon, presetFire, presetBacklight, presetUnder, presetBlinds, PRESETS, GOBOS } from "./lights.js";
 import { Composer, renderToBlob, MODES, LIGHT_NOTES } from "./render.js";
@@ -15,6 +15,7 @@ import { Store, ASPECTS, newVineta, defaultView, defaultCamera } from "./store.j
 import { buildExample } from "./example.js";
 import { createHome } from "./home.js";
 import * as share from "./share.js";
+import { gatherObstacles, deformSkin, resetSkin } from "./contact.js";
 import { dress, GARMENTS, MATERIALS, FOLD_TYPES, newGarment, HAIR_STYLES } from "./cloth.js";
 import { equip, ACCESSORIES, MATERIALS as ACC_MATS, FINGER_NAMES, newAccessory } from "./accessories.js";
 import * as cloud from "./cloud.js";
@@ -132,6 +133,7 @@ function buildObject(o) {
     figs.set(o.id, fig);
     g = fig.root;
     g.position.fromArray(o.pos); g.rotation.set(0, (o.rotY || 0) * DEG, 0);
+    fig.root.userData.isFigure = true;
     if (o.clothes?.length || hasHair(o)) dressFig(o, fig);
     if (o.accessories?.length) fig.acc = equip(fig, o.accessories, { useColor: store.v.view.mode !== "clay" });
   } else {
@@ -151,8 +153,9 @@ function buildObject(o) {
 function dressFig(o, fig) {
   const v = store.v.view;
   fig.root.updateMatrixWorld(true);
+  resetSkin(fig); // la ropa se mide sobre el cuerpo sin aplastar
   fig.dress?.dispose();
-  fig.dress = o.clothes?.length || hasHair(o) ? dress(fig, o.clothes || [], { hair: o.hair, quality: v.clothQ, useColor: v.mode !== "clay", map: !!v.tension, wind: v.wind || 0, windDir: v.windDir || 0 }) : null;
+  fig.dress = o.clothes?.length || hasHair(o) ? dress(fig, o.clothes || [], { obstacles: () => obstaclesFor(fig), hair: o.hair, quality: v.clothQ, useColor: v.mode !== "clay", map: !!v.tension, wind: v.wind || 0, windDir: v.windDir || 0 }) : null;
   fig.root.traverse(c => { c.userData.objId = o.id; });
 }
 const hasHair = o => !!(o.hair && o.hair.style && o.hair.style !== "ninguno");
@@ -643,6 +646,36 @@ new ResizeObserver(resize).observe(viewport);
 
 let lastFrame = 0;
 let lastGazeKey = "";
+// ---------------------------------------------------------------- Contactos: piel y ropa contra muebles, piso y otros cuerpos
+let obsCache = null, obsKey = "", contactAt = 0, contactDone = true;
+function sceneKey() {
+  let k = "";
+  for (const o of store.v.objects) {
+    const g = world.get(o.id); if (!g) continue;
+    if (o.kind === "figure") { const f = figs.get(o.id); for (const j of ["hips", "chest", "head", "wrist_L", "wrist_R", "elbow_L", "elbow_R", "knee_L", "knee_R", "ankle_L", "ankle_R"]) { const e = f.joints[j].matrixWorld.elements; k += (e[12] * 500 | 0) + "," + (e[13] * 500 | 0) + "," + (e[14] * 500 | 0) + ";"; } }
+    else { const e = g.matrixWorld.elements; k += o.id + (e[12] * 500 | 0) + (e[13] * 500 | 0) + (e[14] * 500 | 0) + (e[0] * 100 | 0) + (e[2] * 100 | 0) + (e[5] * 100 | 0) + ";"; }
+  }
+  return k;
+}
+function obstaclesFor(fig) {
+  if (!obsCache) obsCache = new Map();
+  if (!obsCache.has(fig)) obsCache.set(fig, gatherObstacles([...world.values()], [...figs.values()], fig.root));
+  return obsCache.get(fig);
+}
+function contactTick(now) {
+  const k = sceneKey();
+  if (k !== obsKey) {
+    obsKey = k; obsCache = null; contactAt = now; contactDone = false;
+    for (const f of figs.values()) f.dress?.touch();
+    return;
+  }
+  if (!contactDone && now - contactAt > 200) {
+    contactDone = true;
+    const floorY = floor.visible ? 0 : -Infinity;
+    for (const f of figs.values()) deformSkin(f, obstaclesFor(f), floorY);
+    ui.dirty = Math.max(ui.dirty || 0, 1);
+  }
+}
 const lnotes = $("#lnotes");
 lnotes.innerHTML = LIGHT_NOTES.map(([l, c]) => `<li><i style="background:${c}"></i>${l}</li>`).join("");
 renderer.setAnimationLoop(now => {
@@ -653,6 +686,7 @@ renderer.setAnimationLoop(now => {
   const roll = store.v?.camera.roll || 0;
   if (roll) camera.rotateZ(roll * DEG);
   if (camera.position.y < 0.03) camera.position.y = 0.03;
+  contactTick(now);
   for (const f of figs.values()) if (f.dress?.tick(now)) ui.dirty = Math.max(ui.dirty || 0, 1);
   // La mirada "al lector" solo obliga a redibujar cuando la cámara se movió (antes redibujaba sin parar)
   const camKey = camera.position.x.toFixed(4) + camera.position.y.toFixed(4) + camera.position.z.toFixed(4);
@@ -935,6 +969,50 @@ function clothesPanel(o) {
     <div class="row"><button class="btn" data-act="char-save">Guardar como personaje</button></div>`;
   return h;
 }
+// ---------------------------------------------------------------- Práctica cronometrada
+let drill = null;
+function startDrill(o) {
+  const cat = ui.drillCat || "todas", keys = Object.entries(POSE_LIBRARY).filter(([, d]) => cat === "todas" ? d.cat !== "paginas" : d.cat === cat).map(([k]) => k);
+  const order = keys.sort(() => Math.random() - 0.5).slice(0, ui.drillN || 10);
+  drill = { o, before: clone(o.pose), hands: clone(o.hands), cam: [camera.position.clone(), controls.target.clone()], order, i: -1, secs: ui.drillSecs || 60, left: 0, paused: false, timer: 0 };
+  document.body.classList.add("drilling"); document.body.classList.remove("sheet-open");
+  $("#drill").hidden = false; nextDrill();
+  drill.timer = setInterval(() => { if (!drill || drill.paused) return; drill.left--; drawDrill(); if (drill.left <= 0) nextDrill(); }, 1000);
+}
+function nextDrill() {
+  drill.i++;
+  if (drill.i >= drill.order.length) return endDrill(true);
+  const key = drill.order[drill.i], o = drill.o;
+  setPose(o, POSE_LIBRARY[key]);
+  // ángulo al azar: alrededor del personaje, a veces desde abajo
+  const fig = figs.get(o.id), c = fig.joints.chest.getWorldPosition(new THREE.Vector3());
+  const az = Math.random() * Math.PI * 2, el = (Math.random() < 0.25 ? -12 : 5 + Math.random() * 40) * DEG, dist = fig.d.H * 1.7;
+  const pos = c.clone().add(new THREE.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el) + 0.05, Math.cos(az) * Math.cos(el)).multiplyScalar(dist));
+  pos.y = Math.max(0.1, pos.y);
+  goTo(pos, c); drill.left = drill.secs; markDirty(3); drawDrill();
+}
+function drawDrill() {
+  if (!drill) return;
+  const m = Math.floor(drill.left / 60), sec = drill.left % 60;
+  $("#drill-t").textContent = `${m}:${String(sec).padStart(2, "0")}`;
+  $("#drill-n").textContent = `Pose ${drill.i + 1} de ${drill.order.length} · ${POSE_LIBRARY[drill.order[drill.i]]?.label || ""}`;
+  $("#drill-pause").textContent = drill.paused ? "Seguir" : "Pausa";
+  $("#drill").classList.toggle("urgent", drill.left <= 5);
+}
+function endDrill(done, keep = false) {
+  if (!drill) return;
+  clearInterval(drill.timer);
+  if (!keep) { drill.o.pose = drill.before; drill.o.hands = drill.hands; rebuildObject(drill.o); goTo(...drill.cam); }
+  store.commit();
+  $("#drill").hidden = true; document.body.classList.remove("drilling");
+  if (done) toast(`Práctica terminada: ${drill.order.length} poses.`);
+  drill = null; renderPanel(); markDirty(3);
+}
+$("#drill-next").addEventListener("click", () => drill && nextDrill());
+$("#drill-pause").addEventListener("click", () => { if (drill) { drill.paused = !drill.paused; drawDrill(); } });
+$("#drill-end").addEventListener("click", () => endDrill(false));
+$("#drill-keep").addEventListener("click", () => endDrill(false, true));
+
 function savedChars() { try { return JSON.parse(localStorage.getItem("arnes-chars") || "[]"); } catch { return []; } }
 function writeChars(a) { try { localStorage.setItem("arnes-chars", JSON.stringify(a)); } catch { toast("Este navegador no permite guardar personajes aquí."); } syncProfile(); }
 const CHAR_KEYS = ["params", "face", "clothes", "hair", "accessories", "color", "hands"];
@@ -954,8 +1032,14 @@ function panelPose() {
   <div class="row"><button class="btn accent" data-act="ground">Apoyar en el piso</button><button class="btn${ui.sym ? " on" : ""}" data-act="sym">Simetría ${ui.sym ? "activa" : "apagada"}</button><button class="btn" data-act="mirror">Espejo</button></div>
   <h3>Fijar en su lugar</h3><div class="pills">${ENDS.map(([e, l]) => pill(e, o.pins?.[e] ? e : "", l, "pin")).join("")}</div>
   <p class="sub">Lo fijado (en rojo) no se mueve cuando mueves la pelvis, el pecho o el resto del cuerpo.</p>`;
-  h += `<h3>Poses</h3><div class="lib">${lib.filter(([, d]) => !d.test).map(([k, d]) => `<button class="btn" data-act="pose" data-val="${k}">${d.label}</button>`).join("")}</div>
-  <details class="more"><summary>Poses de prueba de tus páginas (${lib.filter(([, d]) => d.test).length})</summary><div class="lib">${lib.filter(([, d]) => d.test).map(([k, d]) => `<button class="btn" data-act="pose" data-val="${k}">${d.label}</button>`).join("")}</div></details>`;
+  ui.poseCat ??= "pie";
+  h += `<h3>Poses (${lib.length})</h3><div class="pills">${Object.entries(POSE_CATS).map(([k, l]) => pill(k, ui.poseCat, `${l} · ${lib.filter(([, d]) => d.cat === k).length}`, "pose-cat")).join("")}</div>
+  <div class="lib">${lib.filter(([, d]) => d.cat === ui.poseCat).map(([k, d]) => `<button class="btn" data-act="pose" data-val="${k}">${d.label}</button>`).join("")}</div>
+  <h3>Práctica cronometrada</h3><p class="sub">Poses al azar de la biblioteca, vistas desde ángulos al azar. Dibuja hasta que suene el tiempo.</p>
+  <div class="pills"><span class="pl">Categoría</span>${pill("todas", ui.drillCat || "todas", "Todas", "drill-cat")}${Object.entries(POSE_CATS).filter(([k]) => k !== "paginas").map(([k, l]) => pill(k, ui.drillCat || "todas", l, "drill-cat")).join("")}</div>
+  <div class="pills"><span class="pl">Tiempo</span>${[[30, "30 s"], [60, "1 min"], [120, "2 min"], [300, "5 min"]].map(([k, l]) => pill(String(k), String(ui.drillSecs || 60), l, "drill-secs")).join("")}</div>
+  <div class="pills"><span class="pl">Poses</span>${[5, 10, 20].map(n => pill(String(n), String(ui.drillN || 10), String(n), "drill-n")).join("")}</div>
+  <div class="row"><button class="btn accent" data-act="drill-start">Empezar práctica</button></div>`;
   const saved = savedPoses();
   h += `<details class="more"><summary>Mis poses (${saved.length})</summary>
     <div class="row"><input class="text" id="posename" placeholder="Nombre de la pose" aria-label="Nombre de la pose"><button class="btn" data-act="pose-save">Guardar actual</button></div>
@@ -1256,6 +1340,11 @@ panel.addEventListener("click", e => {
       f.name = c.name; rebuildObject(f); store.commit(); renderPanel(); markDirty(3); break;
     }
     case "char-del": { const list = savedChars(); const [c] = list.splice(+val, 1); writeChars(list); renderPanel(); toast(`Se borró «${c.name}» de tus personajes.`); break; }
+    case "pose-cat": ui.poseCat = val; renderPanel(); break;
+    case "drill-cat": ui.drillCat = val; renderPanel(); break;
+    case "drill-secs": ui.drillSecs = +val; renderPanel(); break;
+    case "drill-n": ui.drillN = +val; renderPanel(); break;
+    case "drill-start": startDrill(o); break;
     case "clothq": v.view.clothQ = val; rebuildScene(); store.commit(); renderPanel(); markDirty(3); break;
     case "terrain": { o.params.tipo = val; rebuildObject(o); applyBackground(); store.commit(); renderPanel(); markDirty(); break; }
     case "obj-nocolor": { delete o.color; paint(world.get(o.id), null); store.commit(); renderPanel(); markDirty(); break; }

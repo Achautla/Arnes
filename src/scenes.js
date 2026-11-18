@@ -2,6 +2,7 @@
 import * as THREE from "three";
 import { dress } from "./cloth.js";
 import { equip } from "./accessories.js";
+import { gatherObstacles, deformSkin } from "./contact.js";
 import * as M from "./mannequin.js";
 import { buildProp } from "./props.js";
 import { buildLight } from "./lights.js";
@@ -77,7 +78,7 @@ export function sceneFor(v, { lowEnd = true, mode } = {}) {
     const { g, fig } = buildObject3D(o);
     if (o.color) paint(g, o.color, useColor);
     if (g.userData.hidesFloor) hideFloor = true;
-    content.add(g); world.set(o.id, g); if (fig) figs.set(o.id, fig);
+    content.add(g); world.set(o.id, g); if (fig) { fig.root.userData.isFigure = true; figs.set(o.id, fig); }
   }
   if (view.floor !== false && !hideFloor) {
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), new THREE.MeshStandardMaterial({ color: PAPER, roughness: 1 }));
@@ -99,10 +100,11 @@ export function sceneFor(v, { lowEnd = true, mode } = {}) {
     const fig = figs.get(o.id);
     const hair = o.hair && o.hair.style && o.hair.style !== "ninguno";
     if (fig && (o.clothes?.length || hair)) {
-      fig.dress = dress(fig, o.clothes || [], { hair: o.hair, quality: lowEnd ? "media" : (view.clothQ || "alta"), useColor, map: !!view.tension, wind: view.wind || 0, windDir: view.windDir || 0 });
+      fig.dress = dress(fig, o.clothes || [], { obstacles: () => gatherObstacles([...world.values()], [...figs.values()], fig.root), hair: o.hair, quality: lowEnd ? "media" : (view.clothQ || "alta"), useColor, map: !!view.tension, wind: view.wind || 0, windDir: view.windDir || 0 });
     }
     if (fig && o.accessories?.length) fig.acc = equip(fig, o.accessories, { useColor });
     if (fig) fig.root.traverse(c => { c.userData.objId = o.id; });
+    if (fig) deformSkin(fig, gatherObstacles([...world.values()], [...figs.values()], fig.root), view.floor === false ? -Infinity : 0);
   }
   return { scene, camera, content, figs, world };
 }

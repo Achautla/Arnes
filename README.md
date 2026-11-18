@@ -2,6 +2,13 @@
 
 Storyboard 3D para cómic: posar personajes, colocar cámaras y luces, y obtener un semirender (volumen, sombras y valores) para dibujar a lápiz.
 
+## Fase 3 · entrega 9 y contactos (18-nov)
+
+- **Biblioteca de poses:** 85 poses en 10 categorías (de pie, moverse, sentado, suelo, acción, combate, interacción, gestos, con objetos, páginas), con filtro por categoría.
+- **Práctica cronometrada:** poses al azar de la categoría elegida, ángulo de cámara aleatorio, tiempo por pose (30 s a 5 min) y botón "Quedarme con esta pose".
+- **Contactos y deformación:** la tela (faldas, capas, cabello) ya no atraviesa muebles, objetos ni otras figuras; la ropa ajustada se empuja fuera de los objetos; la piel se aplana contra asientos, suelo y otros cuerpos. La tela también choca consigo misma.
+- Límites conocidos: el aplanado no conserva volumen (no abulta alrededor del contacto) y los objetos se aproximan con cajas.
+
 ## Fase 3 · bloque 2, entregas 5 a 8 (18-nov)
 
 - **Tela sobre tela**: las telas sueltas chocan con las de capas de abajo (capa sobre gabardina) y las capas de encima respetan el grosor de lo que llevan debajo.
