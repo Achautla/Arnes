@@ -24,6 +24,7 @@
       <circle cx="12" cy="4.5" r="2.5"/><path d="M12 7v7M12 14l-4 7M12 14l4 7M5 10l7-1 7 1"/>
     </svg><span>ARNÉS</span>
   </h1>
+  <button class="chip" id="pchip" title="Mis proyectos" aria-label="Mis proyectos"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg> <span class="lbl">Proyectos</span></button>
   <button class="chip" id="vchip" title="Viñetas">Viñeta</button>
   <div class="hbtns">
     <button class="ibtn" id="undo" aria-label="Deshacer" title="Deshacer (Ctrl+Z)" disabled>
@@ -48,6 +49,7 @@
   </div>
   <button id="exit-through" class="exit">Salir de la vista de cámara</button>
   <div id="toast" role="status" hidden></div>
+  <div id="pageview" hidden></div>
   <div id="loading">Cargando el motor 3D…</div>
 </main>
 
@@ -64,6 +66,9 @@
   <button role="tab" data-tab="luz" aria-selected="false">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9V16h7v-2.1A6 6 0 0 0 12 3z"/></svg>Luz
   </button>
+  <button role="tab" data-tab="pagina" aria-selected="false">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="1.5"/><path d="M4 10h16M12 10v11M4 15.5h8"/></svg>Página
+  </button>
 </nav>
 
 <aside id="panel">
@@ -74,6 +79,16 @@
 <dialog id="export" aria-labelledby="xt">
   <div class="dlg">
     <div class="dlg-h"><h2 id="xt">Exportar</h2><button class="ibtn" data-x="close" aria-label="Cerrar">✕</button></div>
+    <section id="xpage-sec">
+      <h3>Página completa</h3>
+      <p class="sub">Toda la página con sus viñetas, globos y bordes, en el estilo que elijas.</p>
+      <div class="frow">
+        <label class="sel"><span>Estilo</span><select id="xpstyle"><option value="actual">Cada viñeta como está</option><option value="clay">Arcilla</option><option value="color">Color</option><option value="values">Valores</option><option value="noir">Noir</option><option value="manga">Manga</option><option value="cel">Cel</option><option value="blue">Líneas azules para entintar</option></select></label>
+        <label class="sel"><span>Resolución</span><select id="xpdpi"><option value="150">150 ppp</option><option value="300" selected>300 ppp</option></select></label>
+      </div>
+      <label class="toggle"><span>Con contorno</span><input type="checkbox" id="xpline" checked></label>
+      <div class="row"><button class="btn accent" data-x="page-pdf">Página en PDF</button><button class="btn" data-x="page-png">Página en PNG</button></div>
+    </section>
     <section>
       <h3>Hoja para imprimir</h3>
       <p class="sub">Hoja carta con la viñeta a escala en líneas claras, lista para dibujar encima a lápiz.</p>
@@ -86,11 +101,17 @@
     <section>
       <h3>Imagen de la viñeta</h3>
       <div class="frow">
-        <label class="sel"><span>Capa</span><select id="xlayer"><option value="actual">Como se ve ahora</option><option value="arcilla">Arcilla</option><option value="valores">Valores</option><option value="contorno">Solo contorno</option></select></label>
+        <label class="sel"><span>Capa</span><select id="xlayer"><option value="actual">Como se ve ahora</option><option value="clay">Arcilla</option><option value="color">Color</option><option value="values">Valores</option><option value="noir">Noir</option><option value="manga">Manga</option><option value="cel">Cel</option><option value="contorno">Solo contorno</option></select></label>
         <label class="sel"><span>Tamaño</span><select id="xres"><option value="1000">1000 px</option><option value="2000" selected>2000 px</option><option value="4000">4000 px</option></select></label>
       </div>
+      <label class="toggle"><span>Con contorno</span><input type="checkbox" id="xline" checked></label>
       <label class="toggle"><span>Fondo transparente</span><input type="checkbox" id="xclear"></label>
       <div class="row"><button class="btn" data-x="png">Descargar PNG</button></div>
+    </section>
+    <section>
+      <h3>Para otras apps</h3>
+      <p class="sub">PSD por capas (fondo, sombras, figuras, contorno) para Photoshop, Krita o Procreate. GLB y OBJ con el modelo 3D de la viñeta para Blender u otras apps.</p>
+      <div class="row"><button class="btn" data-x="psd">PSD por capas</button><button class="btn" data-x="glb">Modelo GLB</button><button class="btn" data-x="obj">Modelo OBJ</button></div>
     </section>
     <section>
       <h3>Proyecto</h3>

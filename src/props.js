@@ -1,6 +1,25 @@
 // Primitivas y utilería, todo en metros y construido con volúmenes simples
 import * as THREE from "three";
 import { clay } from "./util.js";
+import { EXTRA_PROPS, TERRAIN, buildExtra } from "./props2.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+
+// Modelos importados (.glb): se guardan en el proyecto como data URL y se convierten a arcilla
+const models = new Map(); // src → Promise<Group>
+function loadModel(src) {
+  if (!models.has(src)) models.set(src, new Promise((res, rej) => {
+    new GLTFLoader().load(src, gltf => {
+      const root = gltf.scene;
+      const box = new THREE.Box3().setFromObject(root), size = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
+      root.position.set(-c.x, -box.min.y, -c.z); // centrado y apoyado en el piso
+      root.traverse(m => { if (m.isMesh) { m.material = clay; m.castShadow = m.receiveShadow = true; } });
+      const wrap = new THREE.Group(); wrap.add(root); wrap.userData.size = size; res(wrap);
+    }, undefined, rej);
+  }));
+  return models.get(src);
+}
+export const modelReady = src => models.has(src);
+export { EXTRA_PROPS, TERRAIN, TERRAIN_TYPES } from "./props2.js";
 
 export const PRIMITIVES = {
   caja: { label: "Caja", params: { ancho: 50, alto: 50, fondo: 50 } },
@@ -35,10 +54,19 @@ function cyl(g, r1, r2, h, x, y, z, seg = 28) {
 }
 
 export function buildProp(type, p = {}) {
-  const def = PRIMITIVES[type] || PROPS[type];
+  const def = PRIMITIVES[type] || PROPS[type] || EXTRA_PROPS[type] || TERRAIN[type];
   p = { ...(def?.params || {}), ...p };
   const g = new THREE.Group();
   switch (type) {
+    case "modelo": {
+      const ph = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), clay); ph.position.y = 0.15; g.add(ph);
+      if (p.src) loadModel(p.src).then(m => {
+        g.remove(ph); const c = m.clone(true);
+        c.traverse(x => { x.userData.objId = g.userData.objId; }); g.add(c);
+        dispatchEvent(new CustomEvent("arnes-model", { detail: g.userData.objId }));
+      }).catch(() => dispatchEvent(new CustomEvent("arnes-model-failed")));
+      break;
+    }
     case "caja": box(g, cm(p.ancho), cm(p.alto), cm(p.fondo), 0, cm(p.alto) / 2, 0); break;
     case "cilindro": cyl(g, cm(p.radio), cm(p.radio), cm(p.alto), 0, cm(p.alto) / 2, 0, 40); break;
     case "esfera": {
@@ -127,7 +155,9 @@ export function buildProp(type, p = {}) {
       for (let i = 0; i < n; i++) box(g, w - 2 * t, t, d, 0, 0.05 + i * ((h - 0.08) / (n - 1)), 0);
       break;
     }
-    default: box(g, 0.3, 0.3, 0.3, 0, 0.15, 0);
+    default: if (!buildExtra(type, p, g)) box(g, 0.3, 0.3, 0.3, 0, 0.15, 0);
   }
   return g;
 }
+
+export const ALL_PROPS = () => ({ ...PRIMITIVES, ...PROPS, ...EXTRA_PROPS, ...TERRAIN });

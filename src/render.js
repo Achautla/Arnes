@@ -11,6 +11,7 @@ uniform float near, far, thick;
 uniform int mode, tones;
 uniform vec4 th;
 uniform bool outline, blue, clearBg, useNormal, contourOnly;
+uniform float dotSize;
 uniform vec3 ink, blueInk;
 float lin(float d){ float z = d * 2.0 - 1.0; return (2.0 * near * far) / (far + near - z * (far - near)); }
 vec3 toSRGB(vec3 c){ return pow(max(c, 0.0), vec3(1.0/2.2)); }
@@ -25,6 +26,22 @@ void main(){
   float lum = dot(col, vec3(0.299, 0.587, 0.114));
   float v = lum;
   if (mode == 1) { v = quant(lum); col = vec3(v); }
+  else if (mode == 2) { v = lum < th.x ? 0.0 : 1.0; col = vec3(v); }
+  else if (mode == 3) {
+    vec2 px = vUv * res;
+    vec2 r = vec2(px.x + px.y, px.x - px.y) * 0.70710678;
+    vec2 c = mod(r, dotSize) - 0.5 * dotSize;
+    float lo = th.x * 0.55, hi = min(0.95, th.x + 0.35);
+    float t = clamp((lum - lo) / max(hi - lo, 0.01), 0.0, 1.0);
+    float rad = 0.5 * dotSize * 1.12 * sqrt(1.0 - t);
+    v = lum < lo ? 0.0 : (lum > hi ? 1.0 : (length(c) < rad ? 0.0 : 1.0));
+    col = vec3(v);
+  }
+  else if (mode == 4) {
+    float q = lum < th.x ? 0.28 : (lum < th.y ? 0.62 : 1.0);
+    vec3 chroma = col / max(lum, 0.04);
+    col = clamp(chroma * q, 0.0, 1.0); v = q;
+  }
   float e = 0.0;
   if (outline) {
     vec2 o = thick / res;
@@ -55,6 +72,10 @@ void main(){
   gl_FragColor = vec4(col, a);
 }`;
 
+// Modos de semirender ("arcilla" y "color" no cuantizan)
+export const MODE_INDEX = { clay: 0, color: 0, values: 1, noir: 2, manga: 3, cel: 4 };
+export const MODES = { clay: "Arcilla", color: "Color", values: "Valores", noir: "Noir", manga: "Manga", cel: "Cel" };
+
 export class Composer {
   constructor(renderer) {
     this.renderer = renderer;
@@ -66,7 +87,7 @@ export class Composer {
       uniforms: {
         tColor: { value: null }, tDepth: { value: null }, tNormal: { value: null },
         res: { value: new THREE.Vector2(1, 1) }, near: { value: 0.05 }, far: { value: 200 },
-        thick: { value: 1.5 }, mode: { value: 0 }, tones: { value: 3 }, th: { value: new THREE.Vector4(0.2, 0.45, 0.65, 0.85) },
+        thick: { value: 1.5 }, mode: { value: 0 }, dotSize: { value: 7 }, tones: { value: 3 }, th: { value: new THREE.Vector4(0.2, 0.45, 0.65, 0.85) },
         outline: { value: false }, contourOnly: { value: false }, blue: { value: false }, clearBg: { value: false }, useNormal: { value: true },
         ink: { value: new THREE.Color(0.11, 0.11, 0.12) }, blueInk: { value: new THREE.Color(0.25, 0.55, 0.85) },
       },
@@ -88,7 +109,7 @@ export class Composer {
   // view: {mode:'clay'|'values', tones, th:[4], outline, thick}; opts: {blue, clearBg, force, target}
   render(scene, camera, view, opts = {}, hideForNormals = []) {
     const r = this.renderer;
-    const post = opts.force || view.mode === "values" || view.outline || opts.blue;
+    const post = opts.force || (MODE_INDEX[view.mode] || 0) > 0 || view.outline || opts.blue;
     if (!post) { r.setRenderTarget(opts.target || null); r.render(scene, camera); return; }
     const rt = opts.rt || this.rt, nrt = opts.nrt || this.nrt;
     r.setRenderTarget(rt); r.render(scene, camera);
@@ -105,9 +126,10 @@ export class Composer {
     u.tColor.value = rt.texture; u.tDepth.value = rt.depthTexture; u.tNormal.value = nrt.texture;
     u.res.value.set(rt.width, rt.height);
     u.near.value = camera.near; u.far.value = camera.far;
-    u.mode.value = view.mode === "values" ? 1 : 0;
+    u.mode.value = MODE_INDEX[view.mode] ?? 0;
     u.tones.value = view.tones || 3;
     u.th.value.fromArray(thresholds(view));
+    u.dotSize.value = (view.dot || 7) * (opts.scale || 1);
     u.outline.value = !!(view.outline || opts.blue);
     u.useNormal.value = wantN;
     u.thick.value = (view.thick || 1.5) * (opts.scale || 1);
@@ -120,9 +142,11 @@ export class Composer {
 }
 
 export function thresholds(view) {
-  const t = view.tones || 3, k = view.th ?? 0.5; // k: control de "más claro / más oscuro"
+  const m = view.mode;
+  const t = m === "noir" || m === "manga" ? 2 : m === "cel" ? 3 : view.tones || 3, k = view.th ?? 0.5;
   const shift = (k - 0.5) * 0.4;
   const base = t === 2 ? [0.5, 1, 1, 1] : t === 3 ? [0.33, 0.66, 1, 1] : [0.2, 0.4, 0.6, 0.8];
+  if (m === "noir") base[0] = 0.32;
   return base.map(v => (v >= 1 ? 1.01 : Math.min(0.98, Math.max(0.02, v + shift))));
 }
 

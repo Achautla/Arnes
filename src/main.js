@@ -2,14 +2,19 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
-import { DEG, RAD, clamp, uid, clone, round, escapeHtml as esc, saveFile, kelvinToColor as kelvinColor } from "./util.js";
+import { DEG, RAD, clamp, uid, clone, round, escapeHtml as esc, saveFile, kelvinToColor as kelvinColor, paint } from "./util.js";
 import * as M from "./mannequin.js";
 import { POSE_LIBRARY } from "./poses.js";
-import { PRIMITIVES, PROPS, buildProp } from "./props.js";
-import { LIGHT_TYPES, newLight, buildLight, buildLightIcon, presetNoir, presetDay } from "./lights.js";
-import { Composer, renderToBlob } from "./render.js";
+import { PRIMITIVES, PROPS, EXTRA_PROPS, TERRAIN, TERRAIN_TYPES, ALL_PROPS, buildProp } from "./props.js";
+import { LIGHT_TYPES, newLight, buildLight, buildLightIcon, presetNoir, presetDay, presetSunset, presetMoon, presetNeon, presetFire, presetBacklight, presetUnder, presetBlinds, PRESETS, GOBOS } from "./lights.js";
+import { Composer, renderToBlob, MODES } from "./render.js";
+import { applyAtmosphere, aspectOf, sceneFor, disposeScene } from "./scenes.js";
+import { SCENARIOS } from "./scenarios.js";
+import { createPageEditor, styleView, FORMATS } from "./page.js";
 import { Store, ASPECTS, newVineta, defaultView, defaultCamera } from "./store.js";
 import { buildExample } from "./example.js";
+import { createHome } from "./home.js";
+import * as cloud from "./cloud.js";
 
 const PAPER = 0xf1f0ec, DARK = 0x111214, BLUE = 0x7cc0ea, BLUE_DEEP = 0x3e7fb0;
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -118,6 +123,8 @@ function buildObject(o) {
   }
   g.userData.objId = o.id;
   g.traverse(c => { c.userData.objId = o.id; });
+  if (o.color) paint(g, o.color, store.v.view.mode !== "clay");
+  if (store.v.view.forms && o.kind === "figure") addForms(g);
   g.updateMatrixWorld(true);
   world.set(o.id, g); content.add(g);
   return g;
@@ -145,12 +152,28 @@ function rebuildLights() {
   }
 }
 function applyBackground() {
-  const dark = store.v.view.background === "oscuro";
-  const c = new THREE.Color(dark ? DARK : PAPER);
-  scene.background = c;
-  scene.fog = new THREE.Fog(c, dark ? 10 : 14, dark ? 30 : 42);
+  const v = store.v.view, dark = v.background === "oscuro";
+  applyAtmosphere(scene, v);
   minor.material.opacity = dark ? 0.12 : 0.28; major.material.opacity = dark ? 0.3 : 0.7;
-  grid.visible = !!store.v.view.grid;
+  grid.visible = !!v.grid;
+  const terrain = [...world.values()].some(g => g.userData.hidesFloor);
+  floor.visible = v.floor !== false && !terrain;
+}
+function repaintAll() {
+  const useColor = store.v.view.mode !== "clay";
+  for (const o of store.v.objects) { const g = world.get(o.id); if (g) paint(g, o.color || null, useColor); }
+}
+// Formas básicas: cajas de construcción sobre cada parte del cuerpo (ayuda para dibujar)
+const formsMat = new THREE.LineBasicMaterial({ color: 0x3e7fb0, transparent: true, opacity: 0.85 });
+function addForms(root) {
+  root.traverse(m => {
+    if (!m.isMesh || !m.userData.mass || m.userData.forms) return;
+    m.geometry.computeBoundingBox();
+    const b = m.geometry.boundingBox, size = b.getSize(new THREE.Vector3()), c = b.getCenter(new THREE.Vector3());
+    const box = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(size.x, size.y, size.z)), formsMat);
+    box.position.copy(c); box.userData.formsLine = true; box.raycast = () => {};
+    m.add(box); m.userData.forms = box;
+  });
 }
 function rebuildScene() {
   tcontrols.detach();
@@ -169,7 +192,7 @@ function rebuildScene() {
 // ---------------------------------------------------------------- Cámara y marco
 const frameEl = $("#frame"), svg = $("#guides");
 let frameRect = { x: 0, y: 0, w: 1, h: 1 };
-function frameAspect() { return ASPECTS[store.v.camera.aspect] ?? viewport.clientWidth / viewport.clientHeight; }
+function frameAspect() { return aspectOf(store.v.camera, viewport.clientWidth / viewport.clientHeight); }
 function fovFrame() { return 2 * Math.atan(12 / store.v.camera.mm); }
 function layoutFrame() {
   const vw = viewport.clientWidth, vh = viewport.clientHeight, pad = ui.through ? 0 : 14;
@@ -552,7 +575,7 @@ new ResizeObserver(resize).observe(viewport);
 
 let lastFrame = 0;
 renderer.setAnimationLoop(now => {
-  if (!store.project) return;
+  if (!store.project || ui.tab === "pagina") return;
   stepTween(now);
   const changed = controls.update();
   if (changed) markDirty();
@@ -588,12 +611,23 @@ function addFigure() {
   void g; store.commit(); select(o.id);
 }
 function addProp(type) {
-  const def = PRIMITIVES[type] || PROPS[type];
+  const def = ALL_PROPS()[type];
   const t = controls.target;
   const o = { id: uid("p"), kind: "prop", type, name: def.label, pos: [round(t.x, 2), 0, round(t.z, 2)], rot: [0, 0, 0], scale: [1, 1, 1], params: { ...def.params } };
   if (type === "vaso" || type === "lampara") o.pos[1] = 0;
   store.v.objects.push(o); buildObject(o); store.commit(); select(o.id);
 }
+async function importGlb(f) {
+  if (!f) return;
+  if (f.size > 8e6) { toast("El modelo pesa más de 8 MB: simplifícalo antes de importarlo."); return; }
+  const src = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(f); });
+  const t = controls.target;
+  const o = { id: uid("p"), kind: "prop", type: "modelo", name: f.name.replace(/\.(glb|gltf)$/i, ""), pos: [round(t.x, 2), 0, round(t.z, 2)], rot: [0, 0, 0], scale: [1, 1, 1], params: { src } };
+  store.v.objects.push(o); buildObject(o); store.commit(); select(o.id);
+  toast("Modelo importado en arcilla. Si se ve muy grande o pequeño, cambia su escala.");
+}
+addEventListener("arnes-model", () => { markDirty(3); if (ui.tab === "pagina") pageEd.draw(); });
+addEventListener("arnes-model-failed", () => toast("No se pudo leer ese modelo. Prueba exportarlo de nuevo como .glb."));
 function deleteSelected() {
   const id = ui.sel; if (!id) return;
   const v = store.v;
@@ -704,6 +738,8 @@ const tabs = [...document.querySelectorAll('[role="tab"]')];
 function selectTab(name, fromUser = true) {
   const same = name === ui.tab;
   ui.tab = name;
+  pageEd.show(name === "pagina");
+  document.body.classList.toggle("page-mode", name === "pagina");
   for (const t of tabs) t.setAttribute("aria-selected", String(t.dataset.tab === name));
   if (!desktop.matches && fromUser) document.body.classList.toggle("sheet-open", !(same && document.body.classList.contains("sheet-open")));
   if (!desktop.matches && !fromUser) document.body.classList.add("sheet-open");
@@ -727,6 +763,7 @@ function renderPanel() {
   if (t === "escena") h = panelEscena();
   else if (t === "pose") h = panelPose();
   else if (t === "camara") h = panelCamara();
+  else if (t === "pagina") h = pageEd.panelHtml(pill);
   else h = panelLuz();
   panel.innerHTML = h;
   $("#vchip").textContent = store.v.name;
@@ -742,13 +779,16 @@ function panelEscena() {
   <div class="row"><input class="text" id="vname" value="${esc(v.name)}" aria-label="Nombre de la viñeta"><button class="btn" data-act="v-ren">Renombrar</button><button class="btn danger" data-act="v-del" ${P.vinetas.length < 2 ? "disabled" : ""}>Borrar</button></div>`;
   h += `<h2>Agregar</h2><div class="adds"><button class="btn accent" data-act="add-fig">+ Personaje</button>
     ${Object.entries(PRIMITIVES).map(([k, d]) => `<button class="btn" data-act="add" data-val="${k}">${d.label}</button>`).join("")}</div>
-    <details class="more"><summary>Utilería (${Object.keys(PROPS).length})</summary><div class="adds">${Object.entries(PROPS).map(([k, d]) => `<button class="btn" data-act="add" data-val="${k}">${d.label}</button>`).join("")}</div></details>`;
+    <details class="more"><summary>Utilería (${Object.keys(PROPS).length + Object.keys(EXTRA_PROPS).length})</summary><div class="adds">${Object.entries({ ...PROPS, ...EXTRA_PROPS }).map(([k, d]) => `<button class="btn" data-act="add" data-val="${k}">${d.label}</button>`).join("")}</div></details>
+    <div class="row"><button class="btn" data-act="import-glb">Importar modelo .glb</button><input type="file" id="glbfile" accept=".glb,.gltf,model/gltf-binary" hidden></div>
+    <details class="more"><summary>Escenarios y terreno (${Object.keys(SCENARIOS).length})</summary><p class="sub">Se agregan a esta viñeta como objetos normales: puedes mover o borrar cualquier pieza.</p><div class="adds">${Object.entries(SCENARIOS).map(([k, d]) => `<button class="btn" data-act="scenario" data-val="${k}">${d.label}</button>`).join("")}</div></details>`;
   h += `<h2>En esta viñeta</h2>`;
-  h += v.objects.length ? `<div class="olist">${v.objects.map(o => `<button class="oitem${o.id === ui.sel ? " on" : ""}" data-act="sel" data-val="${o.id}"><span>${esc(o.name)}</span><small>${o.kind === "figure" ? `${o.params.height} cm · ${o.params.heads} cabezas` : (PRIMITIVES[o.type] || PROPS[o.type]).label}</small></button>`).join("")}</div>`
+  h += v.objects.length ? `<div class="olist">${v.objects.map(o => `<button class="oitem${o.id === ui.sel ? " on" : ""}" data-act="sel" data-val="${o.id}"><span>${esc(o.name)}</span><small>${o.kind === "figure" ? `${o.params.height} cm · ${o.params.heads} cabezas` : (ALL_PROPS()[o.type]?.label || o.type)}</small></button>`).join("")}</div>`
     : `<p class="empty">Todavía no hay nada. Agrega un personaje o un objeto.</p>`;
   const o = selObj();
   if (o) h += propsOf(o);
-  h += `<h2>Visor</h2><div class="toggles">${toggle("grid", "Grilla", "Líneas cada 10 cm y cada 1 m", v.view.grid)}${toggle("ruler", "Regla de cabezas", "Junto al personaje seleccionado", v.view.ruler)}</div>`;
+  h += `<h2>Visor</h2><div class="toggles">${toggle("grid", "Grilla", "Líneas cada 10 cm y cada 1 m", v.view.grid)}${toggle("ruler", "Regla de cabezas", "Junto al personaje seleccionado", v.view.ruler)}
+    ${toggle("floor", "Piso", "Apágalo para escenas en el aire o sobre terreno", v.view.floor !== false)}${toggle("forms", "Formas básicas", "Cajas de construcción sobre el cuerpo, para aprender a dibujarlo", !!v.view.forms)}</div>`;
   return h;
 }
 function propsOf(o) {
@@ -757,10 +797,12 @@ function propsOf(o) {
   <div class="nums">${num("px", "X", Math.round(o.pos[0] * 100), "cm")}${num("py", "Altura", Math.round(o.pos[1] * 100), "cm")}${num("pz", "Z", Math.round(o.pos[2] * 100), "cm")}</div>
   <div class="nums">${isFig ? num("ry", "Giro", Math.round(o.rotY || 0), "°") : num("rx", "Giro X", Math.round(o.rot[0]), "°") + num("ry", "Giro Y", Math.round(o.rot[1]), "°") + num("rz", "Giro Z", Math.round(o.rot[2]), "°")}</div>`;
   if (!isFig) {
-    const pp = Object.entries(o.params || {});
-    if (pp.length) h += `<div class="nums">${pp.map(([k, val]) => num("param:" + k, k[0].toUpperCase() + k.slice(1), val, k === "escalones" ? "" : "cm")).join("")}</div>`;
+    const pp = Object.entries(o.params || {}).filter(([k, val]) => typeof val === "number");
+    if (o.type === "terreno") h += `<div class="pills">${Object.entries(TERRAIN_TYPES).map(([k, l]) => pill(k, o.params.tipo, l, "terrain")).join("")}</div>`;
+    if (pp.length) h += `<div class="nums">${pp.map(([k, val]) => num("param:" + k, k[0].toUpperCase() + k.slice(1), val, ["escalones", "pisos", "semilla"].includes(k) ? "" : "cm")).join("")}</div>`;
     h += `<div class="nums">${num("scale", "Escala", Math.round((o.scale?.[0] ?? 1) * 100), "%")}</div>`;
   }
+  h += `<div class="row colorrow"><label class="sel"><span>Color (para estilos de color y para separar planos)</span><input type="color" data-act="obj-color" value="${o.color || "#bdb6ac"}"></label>${o.color ? `<button class="btn" data-act="obj-nocolor">Quitar color</button>` : ""}</div>`;
   h += `<div class="row"><button class="btn" data-act="dup">Duplicar</button><button class="btn" data-act="fwd">Copiar a viñetas siguientes</button><button class="btn danger" data-act="del">Borrar</button></div></div>`;
   return h;
 }
@@ -893,10 +935,13 @@ function panelCamara() {
   <div class="readout"><b id="r-dist">${camera.position.distanceTo(controls.target).toFixed(1)} m</b><small>Distancia</small></div>
   <div class="readout"><b>${c.mm} mm</b><small>Lente</small></div></div>`;
   h += `<h3>Plano ${fig ? `<span class="sub-in">sobre ${esc(fig.name)}</span>` : ""}</h3><div class="pills">${Object.entries(SHOTS).map(([k, d]) => pill(k, c.shot, d.label, "shot")).join("")}</div>
-  <h3>Ángulo</h3><div class="pills">${Object.entries(ANGLES).map(([k, d]) => pill(k, c.angle, d.label, "angle")).join("")}${pill("dutch", c.roll ? "dutch" : "", "Holandés", "dutch")}</div>`;
+  <h3>Ángulo</h3><div class="pills">${Object.entries(ANGLES).map(([k, d]) => pill(k, c.angle, d.label, "angle")).join("")}</div>
+  ${slider("roll", "Holandés (inclinar la cámara)", c.roll || 0, -45, 45, 1, "°", "roll")}
+  <p class="sub">También puedes girar la cámara con dos dedos en el visor mientras esta pestaña está abierta.</p>
+  ${tipFor(c)}`;
   h += `<div class="field"><label for="lens">Lente <output id="lens-o">${c.mm} mm</output></label><input type="range" id="lens" data-act="lens" min="14" max="200" step="1" value="${c.mm}">
   <div class="scale"><span>14 gran angular</span><span>50 normal</span><span>200 tele</span></div></div>`;
-  h += `<h3>Proporción de la viñeta</h3><div class="pills">${Object.keys(ASPECTS).map(k => pill(k, c.aspect, k === "libre" ? "Libre" : k, "aspect")).join("")}</div>`;
+  h += `<h3>Proporción de la viñeta</h3><div class="pills">${Object.keys(ASPECTS).map(k => pill(k, c.aspect, k === "libre" ? "Libre" : k, "aspect")).join("")}${typeof c.aspect === "number" ? pill("page", "page", `De su recuadro (${round(c.aspect, 2)}:1)`, "noop") : ""}</div>`;
   h += `<h3>Vistas libres</h3><div class="pills">${[["front", "Frente"], ["side", "Lado"], ["top", "Arriba"], ["persp", "Tres cuartos"]].map(([k, l]) => pill(k, "", l, "view-free")).join("")}</div>`;
   h += `<div class="toggles">${toggle("horizon", "Línea de horizonte", "Siempre a la altura del ojo de la cámara", v.horizon)}${toggle("vp", "Puntos de fuga", "De la grilla del piso y de las verticales", v.vp)}</div>`;
   h += `<button class="btn accent wide" data-act="through">Ver a través de la cámara</button>`;
@@ -905,24 +950,49 @@ function panelCamara() {
 
 function panelLuz() {
   const v = store.v.view;
-  let h = `<h2>Luz</h2><div class="row"><button class="btn accent" data-act="preset" data-val="noir">Lámpara noir</button><button class="btn" data-act="preset" data-val="day">Luz de día</button></div>`;
-  h += `<h3>Luces (${store.v.lights.length} de 4)</h3><div class="olist">${store.v.lights.map(l => `<button class="oitem${l.id === ui.sel ? " on" : ""}" data-act="sel-light" data-val="${l.id}"><span>${esc(l.name)}</span><small>${LIGHT_TYPES[l.type].label.split(" (")[0]} · ${l.kelvin} K</small></button>`).join("") || `<p class="empty">Sin luces: la escena se ve negra.</p>`}</div>`;
+  let h = `<h2>Luz</h2><div class="pills">${Object.entries(PRESETS).map(([k, l]) => pill(k, "", l, "preset")).join("")}</div>`;
+  h += `<h3>Luces (${store.v.lights.length} de 4)</h3><div class="olist">${store.v.lights.map(l => `<button class="oitem${l.id === ui.sel ? " on" : ""}" data-act="sel-light" data-val="${l.id}"><span>${esc(l.name)}</span><small>${LIGHT_TYPES[l.type].label.split(" (")[0]} · ${l.color ? "color propio" : l.kelvin + " K"}${l.gobo && l.gobo !== "ninguno" ? " · " + GOBOS[l.gobo] : ""}</small></button>`).join("") || `<p class="empty">Sin luces: la escena se ve negra.</p>`}</div>`;
   if (store.v.lights.length < 4) h += `<div class="adds">${Object.entries(LIGHT_TYPES).map(([k, d]) => `<button class="btn" data-act="add-light" data-val="${k}">+ ${d.label.split(" (")[0]}</button>`).join("")}</div>`;
   const l = selLight();
   if (l) {
     h += `<div class="card"><div class="card-h"><input class="text" data-act="rename-light" value="${esc(l.name)}" aria-label="Nombre de la luz"></div>
     ${slider("intensity", "Intensidad", l.intensity, 0, LIGHT_TYPES[l.type].max, LIGHT_TYPES[l.type].max > 10 ? 1 : 0.05, "", "light")}
-    ${slider("kelvin", "Temperatura (cálida ↔ fría)", l.kelvin, 1800, 10000, 100, " K", "light")}
+    ${l.color ? "" : slider("kelvin", "Temperatura (cálida ↔ fría)", l.kelvin, 1800, 10000, 100, " K", "light")}
+    <div class="row colorrow"><label class="sel"><span>Color de la luz</span><input type="color" data-act="light-color" value="${l.color || "#ffffff"}"></label>${l.color ? `<button class="btn" data-act="light-nocolor">Usar temperatura</button>` : ""}</div>
+    ${l.type === "foco" ? `<h3>Gobo (sombra proyectada)</h3><div class="pills">${Object.entries(GOBOS).map(([k, g]) => pill(k, l.gobo || "ninguno", g, "gobo")).join("")}</div>` : ""}
     ${l.type !== "ambiente" ? slider("softness", "Sombra (dura ↔ suave)", l.softness, 0, 1, 0.05, "", "light") + `<div class="toggles">${toggle("shadow", "Proyecta sombra", "", l.shadow, "light-t")}</div>` : ""}
     <p class="sub">${l.type !== "ambiente" ? "Mueve la luz con las flechas del visor." : "La luz ambiente ilumina todo por igual."}</p>
     <div class="row"><button class="btn" data-act="fwd">Copiar a viñetas siguientes</button><button class="btn danger" data-act="del">Borrar luz</button></div></div>`;
   }
-  h += `<h2>Semirender</h2><div class="pills">${pill("clay", v.mode, "Arcilla", "mode")}${pill("values", v.mode, "Valores", "mode")}</div>`;
-  if (v.mode === "values") h += `<div class="pills"><span class="pl">Tonos</span>${[2, 3, 5].map(n => pill(String(n), String(v.tones), String(n), "tones")).join("")}</div>${slider("th", "Umbral (más luz ↔ más sombra)", v.th, 0, 1, 0.05, "", "view-r")}`;
+  h += `<h2>Semirender</h2><div class="pills">${Object.entries(MODES).map(([k, l]) => pill(k, v.mode, l, "mode")).join("")}</div>`;
+  const tips = { clay: "Volumen gris, sin color.", color: "Usa el color que le diste a cada objeto.", values: "Agrupa la luz en 2, 3 o 5 tonos.", noir: "Solo negro y blanco: decide dónde van las masas de negro.", manga: "Medios tonos como tramas de puntos.", cel: "Color plano en tres tonos." };
+  h += `<p class="sub">${tips[v.mode] || ""}</p>`;
+  if (v.mode === "values") h += `<div class="pills"><span class="pl">Tonos</span>${[2, 3, 5].map(n => pill(String(n), String(v.tones), String(n), "tones")).join("")}</div>`;
+  if (v.mode !== "clay" && v.mode !== "color") h += slider("th", "Umbral (más luz ↔ más sombra)", v.th, 0, 1, 0.05, "", "view-r");
+  if (v.mode === "manga") h += slider("dot", "Tamaño de la trama", v.dot || 7, 3, 16, 1, " px", "view-r");
   h += `<div class="toggles">${toggle("outline", "Contorno", "Silueta y bordes marcados", v.outline)}</div>`;
   if (v.outline) h += slider("thick", "Grosor del contorno", v.thick, 0.5, 4, 0.25, " px", "view-r");
-  h += `<h3>Fondo</h3><div class="pills">${pill("papel", v.background, "Papel", "bg")}${pill("oscuro", v.background, "Oscuro", "bg")}</div>`;
+  h += `<h3>Fondo y atmósfera</h3><div class="pills">${pill("papel", v.background, "Papel", "bg")}${pill("oscuro", v.background, "Oscuro", "bg")}</div>
+  ${slider("fog", "Niebla o humo (separa los planos)", v.fog || 0, 0, 1, 0.05, "", "fog")}`;
   return h;
+}
+
+// Consejos por plano y ángulo
+const TIPS = {
+  detalle: "El detalle obliga a mirar un objeto o un gesto: úsalo para pistas y tensión.",
+  primer: "El primer plano es emoción: el lector lee la cara antes que el texto.",
+  medio: "El plano medio sirve para diálogos: se ven gestos y manos.",
+  americano: "El americano (corte en las rodillas) da presencia y acción contenida.",
+  general: "El plano general ubica dónde estamos: úsalo al abrir una escena.",
+  picado: "El picado empequeñece al personaje: vulnerable, vigilado.",
+  contrapicado: "El contrapicado lo engrandece: poder, amenaza o heroísmo.",
+  ras: "A ras de piso exagera la escala y el drama; ideal para pasos y caídas.",
+  normal: "A la altura de los ojos es neutral: el lector está al mismo nivel.",
+};
+function tipFor(c) {
+  const t = [TIPS[c.shot], TIPS[c.angle]].filter(Boolean);
+  if (Math.abs(c.roll || 0) > 4) t.push("El holandés transmite inquietud o desequilibrio: úsalo con moderación.");
+  return t.length ? `<p class="tip">${t.map(esc).join(" ")}</p>` : "";
 }
 
 // Barra flotante del visor: modo de transformación
@@ -948,8 +1018,9 @@ panel.addEventListener("toggle", e => {
   if (d.dataset.det === "finger") ui.fingerOpen = d.open; else if (d.dataset.det === "face") ui.faceOpen = d.open;
 }, true);
 panel.addEventListener("click", e => {
-  const b = e.target.closest("[data-act]"); if (!b || b.tagName === "INPUT" || b.tagName === "SELECT") return;
+  const b = e.target.closest("[data-act]"); if (!b || b.tagName === "INPUT" || b.tagName === "SELECT" || b.tagName === "TEXTAREA") return;
   const act = b.dataset.act, val = b.dataset.val;
+  if (/^(pg|pn|bl)-/.test(act)) { pageEd.onClick(act, val); return; }
   const o = selObj(), v = store.v;
   switch (act) {
     case "vineta": storeCamera(); store.project.cur = +val; ui.sel = null; store.commit(); rebuildScene(); renderPanel(); break;
@@ -1006,19 +1077,30 @@ panel.addEventListener("click", e => {
     }
     case "shot": applyShot(val, null); break;
     case "angle": applyShot(null, val); break;
-    case "dutch": v.camera.roll = v.camera.roll ? 0 : 18; store.commit(); renderPanel(); markDirty(); break;
+    case "scenario": {
+      const sc = SCENARIOS[val]; const objs = sc.build();
+      v.objects.push(...objs); for (const ob of objs) buildObject(ob);
+      if (sc.preset) applyPreset(sc.preset);
+      applyBackground(); store.commit(); renderPanel(); markDirty(3); toast(`Escenario agregado: ${sc.label}.`); break;
+    }
+    case "import-glb": $("#glbfile").click(); break;
+    case "terrain": { o.params.tipo = val; rebuildObject(o); applyBackground(); store.commit(); renderPanel(); markDirty(); break; }
+    case "obj-nocolor": { delete o.color; paint(world.get(o.id), null); store.commit(); renderPanel(); markDirty(); break; }
+    case "light-nocolor": { const l = selLight(); delete l.color; rebuildLights(); attachGizmo(); store.commit(); renderPanel(); markDirty(); break; }
+    case "gobo": { const l = selLight(); l.gobo = val; if (val !== "ninguno") l.shadow = true; rebuildLights(); attachGizmo(); store.commit(); renderPanel(); markDirty(); break; }
     case "aspect": v.camera.aspect = val; layoutFrame(); store.commit(); renderPanel(); markDirty(); break;
     case "view-free": freeView(val); break;
     case "through": setThrough(true); break;
     case "preset": applyPreset(val); break;
     case "add-light": { const l = newLight(val); const t = controls.target; if (val !== "sol") l.pos = [round(t.x + 0.6, 2), round(t.y + 0.9, 2), round(t.z + 0.6, 2)]; v.lights.push(l); rebuildLights(); store.commit(); select(l.id); break; }
-    case "mode": v.view.mode = val; store.commit(); renderPanel(); markDirty(); break;
+    case "mode": v.view.mode = val; repaintAll(); store.commit(); renderPanel(); markDirty(); break;
     case "tones": v.view.tones = +val; store.commit(); renderPanel(); markDirty(); break;
     case "bg": v.view.background = val; applyBackground(); store.commit(); renderPanel(); markDirty(); break;
   }
 });
 panel.addEventListener("input", e => {
   const el = e.target, act = el.dataset.act, key = el.dataset.key; if (!act) return;
+  if (act === "bl-text") { pageEd.onInput(act, key, 0, el); return; }
   const val = +el.value, out = document.getElementById(el.id + "-o");
   const o = selObj();
   if (out && el.type === "range") out.textContent = fmt(val, +el.step) + (out.textContent.match(/[^\d.\-]+$/)?.[0] || "");
@@ -1045,16 +1127,30 @@ panel.addEventListener("input", e => {
     else if (key === "softness") { if (L.shadow) L.shadow.radius = 1 + val * 9; if (L.isSpotLight) L.penumbra = 0.15 + val * 0.7; }
     markDirty();
   } else if (act === "view-r") { store.v.view[key] = val; markDirty(); }
+  else if (act === "fog") { store.v.view.fog = val; applyBackground(); markDirty(); }
+  else if (act === "roll") { store.v.camera.roll = val; markDirty(); }
+  else if (pageEd.onInput(act, key, val, el)) { /* página */ }
 });
 panel.addEventListener("change", e => {
-  const el = e.target, act = el.dataset.act, key = el.dataset.key; if (!act) return;
+  const el = e.target, act = el.dataset.act, key = el.dataset.key;
+  if (el.id === "glbfile") { importGlb(el.files[0]); el.value = ""; return; }
+  if (!act) return;
   const o = selObj(), v = store.v;
-  if (["joint-rot", "param", "lens", "light", "view-r", "face"].includes(act)) {
+  if (pageEd.onChangeEl(act, el)) return;
+  if (act === "obj-color") { o.color = el.value; paint(world.get(o.id), o.color, store.v.view.mode !== "clay"); if (store.v.view.mode === "clay") toast("El color se ve en los estilos Color, Cel, Noir, Manga y Valores."); store.commit(); renderPanel(); markDirty(); return; }
+  if (act === "light-color") { const l = selLight(); l.color = el.value; rebuildLights(); attachGizmo(); store.commit(); renderPanel(); markDirty(); return; }
+  if (["joint-rot", "param", "lens", "light", "view-r", "face", "fog", "roll"].includes(act)) {
     if (act === "joint-rot") o.pose = M.readPose(figs.get(o.id), o.pose);
     store.commit(); if (act === "param") renderPanel(); return;
   }
   if (act === "anchor") { setAnchor(o, el.dataset.end, el.value); store.commit(); markDirty(3); return; }
-  if (act === "view") { v.view[key] = el.checked; if (key === "grid") applyBackground(); if (key === "ruler") buildRuler(); store.commit(); markDirty(); return; }
+  if (act === "view") {
+    v.view[key] = el.checked;
+    if (key === "grid" || key === "floor") applyBackground();
+    if (key === "ruler") buildRuler();
+    if (key === "forms") rebuildScene();
+    store.commit(); markDirty(); return;
+  }
   if (act === "ui") { if (key === "pin") ui.pinFeet = el.checked; return; }
   if (act === "fig") { o.relaxed = el.checked; M.applyPose(figs.get(o.id), o.pose, o.relaxed); store.commit(); renderPanel(); markDirty(); return; }
   if (act === "light-t") { const l = selLight(); l.shadow = el.checked; lights.get(l.id).light.castShadow = el.checked; store.commit(); markDirty(); return; }
@@ -1092,16 +1188,17 @@ function syncLensUI() { $("#hud-lens").textContent = store.v.camera.mm + " mm"; 
 function applyPreset(k) {
   const v = store.v;
   let lampPos = null;
-  const lamp = v.objects.find(o => o.type === "lampara");
+  const lamp = v.objects.find(o => o.type === "lampara" || o.type === "colgante" || o.type === "farol");
   if (lamp) {
     const g = world.get(lamp.id), off = g.userData.lightOffset || [0, 0.3, 0];
     lampPos = new THREE.Vector3(...off).applyMatrix4(g.matrixWorld).toArray().map(x => round(x, 3));
   }
-  const p = k === "noir" ? presetNoir(lampPos) : presetDay();
-  v.lights = p.lights; v.view.background = p.background;
-  rebuildLights(); applyBackground(); ui.sel = p.lights[0].id; attachGizmo();
+  const F = { noir: () => presetNoir(lampPos), day: presetDay, sunset: presetSunset, moon: presetMoon, neon: presetNeon, fire: presetFire, back: presetBacklight, under: presetUnder, blinds: presetBlinds };
+  const p = (F[k] || presetDay)();
+  v.lights = p.lights; v.view.background = p.background; v.view.fog = p.fog ?? v.view.fog ?? 0;
+  rebuildLights(); applyBackground(); ui.sel = p.lights.find(l => l.type !== "ambiente")?.id || p.lights[0].id; attachGizmo();
   store.commit(); renderPanel(); markDirty();
-  if (k === "noir" && !lamp) toast("Agrega una lámpara de escritorio y vuelve a elegir el preset para que la luz salga de ella.");
+  if (k === "noir" && !lamp) toast("Agrega una lámpara y vuelve a elegir el preset para que la luz salga de ella.");
 }
 
 // Poses guardadas en el dispositivo
@@ -1114,14 +1211,46 @@ function savePose(name, o) {
   writePoses(all);
 }
 
+// ---------------------------------------------------------------- Editor de página
+const pageEd = createPageEditor({
+  store, renderer, composer, toast, renderPanel,
+  onChange: () => store.commit(),
+  editVineta: id => { storeCamera(); store.project.cur = store.project.vinetas.findIndex(v => v.id === id); ui.sel = null; store.commit(); rebuildScene(); selectTab("camara", false); },
+  newVinetaFor: () => { storeCamera(); const c = clone(store.v); c.id = uid("v"); c.name = `Viñeta ${store.project.vinetas.length + 1}`; store.project.vinetas.push(c); return c; },
+  openExport: () => dlg.showModal(),
+});
+
+// Giro con dos dedos (holandés) mientras la pestaña Cámara está abierta
+const touches = new Map(); let twist = null;
+renderer.domElement.addEventListener("pointerdown", e => { if (e.pointerType === "touch") touches.set(e.pointerId, [e.clientX, e.clientY]); });
+renderer.domElement.addEventListener("pointermove", e => {
+  if (!touches.has(e.pointerId)) return;
+  touches.set(e.pointerId, [e.clientX, e.clientY]);
+  if (touches.size !== 2 || ui.tab !== "camara") { twist = null; return; }
+  const [a, b] = [...touches.values()];
+  const ang = Math.atan2(b[1] - a[1], b[0] - a[0]) * RAD;
+  if (twist !== null) {
+    let d = ang - twist; if (d > 180) d -= 360; if (d < -180) d += 360;
+    store.v.camera.roll = clamp((store.v.camera.roll || 0) - d, -45, 45);
+    const r = $("#roll"); if (r) { r.value = store.v.camera.roll; $("#roll-o").textContent = Math.round(store.v.camera.roll) + "°"; }
+    markDirty();
+  }
+  twist = ang;
+});
+const endTouch = e => { if (touches.delete(e.pointerId) && touches.size < 2 && twist !== null) { twist = null; store.commit(); } };
+renderer.domElement.addEventListener("pointerup", endTouch);
+renderer.domElement.addEventListener("pointercancel", endTouch);
+
 // ---------------------------------------------------------------- Cabecera: deshacer, exportar
 $("#undo").addEventListener("click", () => store.undo());
 $("#redo").addEventListener("click", () => store.redo());
 $("#vchip").addEventListener("click", () => selectTab("escena", false));
 store.on(kind => {
-  if (kind === "restore") { rebuildScene(); renderPanel(); }
+  if (kind === "restore") { rebuildScene(); renderPanel(); pageEd.draw(); }
   if (kind === "commit") { $("#undo").disabled = !store.past.length; $("#redo").disabled = !store.future.length; }
-  if (kind === "saved") $("#savestate").textContent = "Guardado en este dispositivo";
+  if (kind === "saved") $("#savestate").textContent = cloud.user() ? "Guardado en este dispositivo · sincronizando…" : "Guardado en este dispositivo";
+  if (kind === "synced") $("#savestate").textContent = "Guardado en este dispositivo y en la nube";
+  if (kind === "sync-failed") $("#savestate").textContent = "Guardado en este dispositivo · la nube no respondió, se reintenta al siguiente cambio";
   if (kind === "save-failed") $("#savestate").textContent = "Sin guardado automático aquí: exporta el proyecto";
 });
 addEventListener("keydown", e => {
@@ -1145,9 +1274,42 @@ dlg.addEventListener("click", async e => {
   if (x === "close") { dlg.close(); return; }
   b.disabled = true; st.textContent = "Preparando…";
   try {
-    if (x === "png") {
+    if (x === "page-png" || x === "page-pdf") {
+      storeCamera();
+      const pst = $("#xpstyle").value, dpi = +$("#xpdpi").value;
+      st.textContent = "Dibujando la página…";
+      const { canvas } = await pageEd.exportCanvas({ dpi, style: pst === "blue" ? "clay" : pst, outline: $("#xpline").checked, blue: pst === "blue" });
+      const pg = pageEd.page(), name = slug(store.project.name || "pagina") + "-pag" + (store.project.curPage + 1);
+      if (x === "page-png") {
+        const blob = await new Promise(r => canvas.toBlob(r, "image/png"));
+        st.textContent = await resultMsg(saveFile(name + ".png", blob));
+      } else {
+        const jsPDF = await loadJsPDF(), F = FORMATS[pg.format];
+        const doc = new jsPDF({ unit: "mm", format: [F.w, F.h], orientation: F.w > F.h ? "l" : "p" });
+        doc.addImage(canvas.toDataURL("image/jpeg", 0.93), "JPEG", 0, 0, F.w, F.h);
+        st.textContent = await resultMsg(saveFile(name + ".pdf", doc.output("blob")));
+      }
+    } else if (x === "psd") {
+      st.textContent = "Separando capas…";
+      const blob = await exportPsd(+$("#xres").value);
+      st.textContent = await resultMsg(saveFile(`${slug(store.v.name)}.psd`, blob));
+    } else if (x === "glb" || x === "obj") {
+      storeCamera();
+      const { scene: sc, content: ct } = sceneFor(store.v);
+      ct.updateMatrixWorld(true);
+      let data;
+      if (x === "glb") {
+        const { GLTFExporter } = await import("three/addons/exporters/GLTFExporter.js");
+        data = new Blob([await new GLTFExporter().parseAsync(ct, { binary: true })], { type: "model/gltf-binary" });
+      } else {
+        const { OBJExporter } = await import("three/addons/exporters/OBJExporter.js");
+        data = new Blob([new OBJExporter().parse(ct)], { type: "text/plain" });
+      }
+      disposeScene(sc);
+      st.textContent = await resultMsg(saveFile(`${slug(store.v.name)}.${x}`, data));
+    } else if (x === "png") {
       const res = +$("#xres").value, layer = $("#xlayer").value, clear = $("#xclear").checked;
-      const view = layerView(layer);
+      const view = layerView(layer, $("#xline").checked);
       const A = frameAspect(), w = A >= 1 ? res : Math.round(res * A), h = A >= 1 ? Math.round(res / A) : res;
       const { blob } = await withExportScene(() => renderToBlob(renderer, composer, scene, exportCamera(), view, w, h, { clearBg: clear }, [grid, ruler]));
       st.textContent = await resultMsg(saveFile(`${slug(store.v.name)}-${layer}.png`, blob));
@@ -1181,12 +1343,48 @@ $("#xfile").addEventListener("change", async e => {
 });
 async function resultMsg(p) { const r = await p; return r === "ok" ? "Listo." : r === "declined" ? "Descarga cancelada." : "Este visor no permite descargar archivos. Abre Arnés desde GitHub Pages."; }
 const slug = s => s.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^\w]+/g, "-").replace(/^-|-$/g, "").toLowerCase() || "arnes";
-function layerView(layer) {
+function layerView(layer, outline = store.v.view.outline) {
   const v = store.v.view;
-  if (layer === "actual") return v;
-  if (layer === "arcilla") return { ...v, mode: "clay", outline: false };
-  if (layer === "valores") return { ...v, mode: "values", outline: false };
-  return { ...v, mode: "clay", outline: true, contourOnly: true };
+  if (layer === "contorno") return { ...v, mode: "clay", outline: true, contourOnly: true };
+  return styleView(v, layer, outline);
+}
+// PSD: arcilla de fondo, figuras sueltas, valores y contorno en capas separadas
+async function exportPsd(res) {
+  const A = frameAspect(), w = A >= 1 ? res : Math.round(res * A), h = A >= 1 ? Math.round(res / A) : res;
+  const agPsd = await loadAgPsd();
+  const v = store.v.view, cam = exportCamera();
+  const figGroups = [...figs.keys()].map(id => world.get(id)).filter(Boolean);
+  const propGroups = [...world.entries()].filter(([id]) => !figs.has(id)).map(([, g]) => g);
+  const shot = async (view, opts, hide) => {
+    const vis = hide.map(o => o.visible); hide.forEach(o => (o.visible = false));
+    try { return (await withExportScene(() => renderToBlob(renderer, composer, scene, cam, view, w, h, opts, [grid, ruler]))).canvas; }
+    finally { hide.forEach((o, i) => (o.visible = vis[i])); }
+  };
+  const base = await shot({ ...v, mode: "clay", outline: false }, {}, []);
+  const stage = await shot({ ...v, mode: "clay", outline: false }, {}, figGroups);
+  const people = await shot({ ...v, mode: "clay", outline: false }, { clearBg: true }, [...propGroups, floor]);
+  const values = await shot({ ...v, mode: "values", outline: false }, {}, []);
+  const line = await shot({ ...v, mode: "clay", outline: true, contourOnly: true }, { clearBg: true }, []);
+  const psd = {
+    width: w, height: h, canvas: base,
+    children: [
+      { name: "Escenario (arcilla)", canvas: stage },
+      { name: "Figuras", canvas: people },
+      { name: "Valores", canvas: values, opacity: 0.6, blendMode: "multiply", hidden: true },
+      { name: "Contorno", canvas: line },
+    ],
+  };
+  return new Blob([agPsd.writePsd(psd)], { type: "image/vnd.adobe.photoshop" });
+}
+let agPsdP = null;
+function loadAgPsd() {
+  if (window.agPsd) return Promise.resolve(window.agPsd);
+  agPsdP ??= new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/ag-psd@34.1.0/dist/bundle.js";
+    s.onload = () => res(window.agPsd); s.onerror = rej; document.head.appendChild(s);
+  });
+  return agPsdP;
 }
 async function withExportScene(fn) {
   const vis = [...Object.values(handles), actionLine, comMarker].map(o => o.visible);
@@ -1236,7 +1434,7 @@ function toast(msg) {
 }
 
 // Acceso para pruebas desde la consola
-window.__arnes = { store, ui, select, setPose, figs, selectTab, applyShot, camera, controls, rebuildScene, renderPanel, markDirty, POSE_LIBRARY, addFigure, M, pinHere, setAnchor, groundFigure, migrate };
+window.__arnes = { pageEd, exportPsd, store, ui, select, setPose, figs, selectTab, applyShot, camera, controls, rebuildScene, renderPanel, markDirty, POSE_LIBRARY, addFigure, M, pinHere, setAnchor, groundFigure, migrate };
 
 // ---------------------------------------------------------------- Arranque
 $("#hint").textContent = coarse ? "Un dedo: girar · Dos dedos: acercar y desplazar · Toca para elegir" : "Arrastrar: girar · Clic derecho: desplazar · Rueda: acercar · Clic: elegir";
@@ -1244,15 +1442,34 @@ desktop.addEventListener("change", () => document.body.classList.remove("sheet-o
 window.claude?.hot?.snapshot?.(() => ({ project: store.project, tab: ui.tab }));
 
 async function start(hot = {}) {
-  let project = hot.project || null;
-  if (!project) { const saved = await store.readSaved(); if (saved) try { project = JSON.parse(saved); } catch { project = null; } }
-  if (!project?.vinetas?.length) project = buildExample();
-  store.load(migrate(project));
-  ui.tab = hot.tab || "escena";
-  for (const t of tabs) t.setAttribute("aria-selected", String(t.dataset.tab === ui.tab));
-  rebuildScene(); resize(); renderPanel();
+  if (hot.project) { openProject(hot.project, hot.tab); return; }
+  await store.list(); // migra el guardado de versiones anteriores
+  home.show();
   document.body.classList.add("ready");
 }
+function openProject(project, tab = "escena") {
+  if (!project?.vinetas?.length) project = buildExample();
+  store.load(migrate(project));
+  ui.sel = null; ui.joint = null;
+  ui.tab = tab;
+  for (const t of tabs) t.setAttribute("aria-selected", String(t.dataset.tab === ui.tab));
+  pageEd.show(ui.tab === "pagina"); document.body.classList.toggle("page-mode", ui.tab === "pagina");
+  $("#undo").disabled = $("#redo").disabled = true;
+  rebuildScene(); resize(); renderPanel(); store.saveNow();
+  document.body.classList.add("ready");
+}
+function blankProject() {
+  const v = newVineta("Viñeta 1"); const p = presetDay(); v.lights = p.lights; v.view.background = p.background;
+  return { version: 2, name: "Proyecto nuevo", cur: 0, vinetas: [v] };
+}
+const home = createHome({
+  store,
+  onOpen: p => { if (p) openProject(p); else if (store.project) markDirty(3); },
+  makeExample: () => buildExample(),
+  makeBlank: blankProject,
+});
+window.__arnes.home = home;
+$("#pchip").addEventListener("click", async () => { if (store.project) { storeCamera(); clearTimeout(store.saveTimer); await store.saveNow(); } home.show(); });
 await document.fonts?.ready;
 window.claude?.hot?.ready ? window.claude.hot.ready(start) : start(window.claude?.hot?.data ?? {});
 

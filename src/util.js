@@ -45,3 +45,18 @@ export async function saveFile(filename, data) {
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   return "ok";
 }
+
+// Color por objeto: material de arcilla teñido (uno por color)
+const colorCache = new Map();
+export function colorMat(hex) {
+  if (!colorCache.has(hex)) colorCache.set(hex, new THREE.MeshStandardMaterial({ color: new THREE.Color(hex), roughness: 0.82, metalness: 0 }));
+  return colorCache.get(hex);
+}
+// Pinta un objeto con su color (o lo regresa a arcilla). Solo toca las piezas de arcilla
+export function paint(root, hex, useColor = true) {
+  root.traverse(m => {
+    if (!m.isMesh) return;
+    if (m.userData.baseMat === undefined) { if (m.material !== clay) return; m.userData.baseMat = clay; }
+    m.material = hex && useColor ? colorMat(hex) : m.userData.baseMat;
+  });
+}

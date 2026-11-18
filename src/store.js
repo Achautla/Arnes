@@ -20,6 +20,7 @@ export class Store {
   }
   get v() { return this.project.vinetas[this.project.cur]; }
   load(project) {
+    project.id ??= uid("p"); project.name ??= "Mi proyecto";
     this.project = project;
     this.snap = JSON.stringify(project); this.past = []; this.future = [];
   }
@@ -87,25 +88,58 @@ export class Store {
     });
     return this.db;
   }
-  async readSaved() {
+  // --- Varios proyectos: "index" guarda la lista; cada proyecto vive en "p:<id>"
+  async kv(mode, fn) {
     const db = await this.openDb(); if (!db) return null;
     return new Promise(res => {
       try {
-        const q = db.transaction("kv").objectStore("kv").get("project");
-        q.onsuccess = () => res(q.result || null); q.onerror = () => res(null);
+        const tx = db.transaction("kv", mode), st = tx.objectStore("kv");
+        const q = fn(st);
+        if (mode === "readonly") { q.onsuccess = () => res(q.result ?? null); q.onerror = () => res(null); }
+        else { tx.oncomplete = () => res(true); tx.onerror = () => res(false); }
       } catch { res(null); }
     });
   }
+  get(key) { return this.kv("readonly", st => st.get(key)); }
+  put(key, val) { return this.kv("readwrite", st => st.put(val, key)); }
+  del(key) { return this.kv("readwrite", st => st.delete(key)); }
+  async list() {
+    let idx = await this.get("index");
+    if (!idx) {
+      idx = [];
+      const old = await this.get("project"); // guardado de versiones anteriores
+      if (old) {
+        try {
+          const p = JSON.parse(old); p.id ??= uid("p"); p.name ??= "Mi proyecto";
+          await this.put("p:" + p.id, JSON.stringify(p));
+          idx.push(entryOf(p)); await this.del("project");
+        } catch {}
+      }
+      await this.put("index", idx);
+    }
+    return idx.sort((a, b) => b.updated - a.updated);
+  }
+  async readProject(id) { const s = await this.get("p:" + id); try { return s ? JSON.parse(s) : null; } catch { return null; } }
+  async removeProject(id) { await this.del("p:" + id); const idx = (await this.list()).filter(e => e.id !== id); await this.put("index", idx); }
+  async writeProject(p) {
+    const updated = Date.now();
+    const ok = await this.put("p:" + p.id, JSON.stringify({ ...p, updated }));
+    const idx = (await this.list()).filter(e => e.id !== p.id); idx.push({ ...entryOf(p), updated }); await this.put("index", idx);
+    return ok;
+  }
+  // compatibilidad: el último proyecto abierto
+  async readSaved() { const idx = await this.list(); return idx[0] ? this.get("p:" + idx[0].id) : null; }
   scheduleSave() {
     clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => this.saveNow(), 700);
   }
   async saveNow() {
-    const db = await this.openDb(); if (!db) { this.emit("save-failed"); return; }
-    try {
-      const tx = db.transaction("kv", "readwrite");
-      tx.objectStore("kv").put(JSON.stringify(this.project), "project");
-      tx.oncomplete = () => this.emit("saved");
-    } catch { this.emit("save-failed"); }
+    if (!this.project) return;
+    const ok = await this.writeProject(this.project);
+    this.emit(ok ? "saved" : "save-failed");
   }
+}
+
+export function entryOf(p) {
+  return { id: p.id, name: p.name || "Mi proyecto", updated: p.updated || Date.now(), vinetas: p.vinetas?.length || 0, pages: p.pages?.length || 0, cloud: p.cloud || null };
 }

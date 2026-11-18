@@ -2,6 +2,17 @@
 
 Storyboard 3D para cómic: posar personajes, colocar cámaras y luces, y obtener un semirender (volumen, sombras y valores) para dibujar a lápiz.
 
+## Fase 2 · bloque 2 (página, estilos, escenarios y nube) — publicado
+
+- **Inicio**: entrar a la nube (cuando se active) → mis proyectos (nuevo, ejemplo, renombrar, duplicar, borrar) → área de diseño. El botón «Proyectos» de la cabecera vuelve a la lista.
+- **Página** (5.ª pestaña): formatos cómic americano, carta, A4 y manga B5; 8 distribuciones (incluida «Como tus páginas»); margen, calle e inclinación; vértices editables para viñetas libres o inclinadas; insertos; plantillas propias; semirender en vivo dentro de cada recuadro; globos (diálogo, pensamiento, grito, caja de texto).
+- **Composición**: tercios, recorrido de lectura numerado, aviso de salto de eje entre viñetas seguidas, holandés libre de −45° a 45° (deslizador o giro con dos dedos), consejos por plano y ángulo.
+- **Estilos**: arcilla, color (por objeto), valores, noir, manga (trama de puntos), cel; con o sin contorno.
+- **Luz**: 9 presets (lámpara noir, día, atardecer, luna, neón, fogata, contraluz, desde abajo, persiana), color propio por luz, gobos en focos (persiana, ventana, rejas, hojas), niebla o humo.
+- **Escenarios**: 18 (sótano, oficina, callejón, calle, bar, recámara, porche, sala de juntas, biblioteca, obra, cocina, sala, aula, campo, bosque, abismo, cueva, río), 21 piezas de utilería nuevas sacadas de tus páginas, terreno irregular con relieve, importar modelos .glb, capa de formas básicas.
+- **Exportar**: página en PNG/PDF a 150 o 300 ppp en cualquier estilo (o líneas azules); viñeta en PNG en cualquier estilo; PSD por capas (ag-psd 34.1.0); modelo GLB y OBJ.
+- **Nube**: código listo (`src/cloud.js`, `supabase/schema.sql` con RLS). Se activa pegando la URL y la clave publicable en `src/cloud-config.js`.
+
 ## Fase 2 · bloque 1 (movimiento) — publicado
 
 - **Esqueleto de 55 articulaciones**: clavículas que acompañan al brazo, columna de 4 segmentos, cuello de 2, mandíbula, antebrazo con giro visible, 15 articulaciones por mano y dedos del pie.
@@ -34,12 +45,20 @@ Para probarla en tu computadora sin publicar: `python -m http.server` en esta ca
 - `index.html`, `styles.css`: interfaz (teléfono primero; panel lateral en pantallas de 900 px o más).
 - `src/main.js`: escena, viñetas, selección, interacción y paneles.
 - `src/mannequin.js`: maniquí segmentado, límites, IK, manos, mirada, centro de masa.
-- `src/poses.js`, `src/props.js`, `src/lights.js`: biblioteca de poses, utilería y luces.
+- `src/poses.js`, `src/props.js`, `src/props2.js`, `src/lights.js`: biblioteca de poses, utilería, terreno, luces, presets y gobos.
+- `src/scenarios.js`: escenarios armados. `src/scenes.js`: escenas fuera del visor (miniaturas de página y exportación).
+- `src/page.js`: editor de página. `src/home.js`: inicio y mis proyectos. `src/cloud.js`, `src/cloud-config.js`: nube (Supabase por REST).
 - `src/render.js`: semirender (valores, contorno, líneas azules) y exportación a imagen.
 - `src/store.js`: proyecto, deshacer y guardado sin conexión. `src/example.js`: proyecto de ejemplo.
 - `sw.js`, `manifest.webmanifest`: instalación y uso sin conexión.
 
-Motor 3D: Three.js 0.160.0 (jsDelivr). PDF: jsPDF 2.5.1 (cdnjs).
+Motor 3D: Three.js 0.160.0 (jsDelivr). PDF: jsPDF 2.5.1 (cdnjs). PSD: ag-psd 34.1.0 (jsDelivr).
+
+### Activar la nube
+1. Crea un proyecto en Supabase (en tu organización personal).
+2. En el editor SQL, corre `supabase/schema.sql`.
+3. En *Authentication → Providers*, deja activo «Email».
+4. Pega la URL del proyecto y la clave publicable (anon) en `src/cloud-config.js` y sube el cambio.
 
 ## Documento del proyecto
 
