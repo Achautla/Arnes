@@ -3,6 +3,6 @@
 // y pega aquí la URL del proyecto y su clave publicable (anon). Ambas son públicas por diseño;
 // la seguridad la dan las reglas RLS del esquema.
 export const CLOUD = {
-  url: "",
+  url: "https://nokiuqisqrbvdxdotkkk.supabase.co",
   anonKey: "",
 };
