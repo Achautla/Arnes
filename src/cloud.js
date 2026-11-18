@@ -78,6 +78,8 @@ export function push(p) {
     body: JSON.stringify({ id: p.id, name: p.name || "Mi proyecto", vinetas: p.vinetas.length, data: p, updated_at: new Date().toISOString() }),
   });
 }
+// Borra la cuenta y todo lo guardado en la nube (proyectos y perfil). Lo del dispositivo se queda.
+export async function deleteAccount() { await rest("rpc/delete_my_account", { method: "POST", body: "{}" }); keep(null); }
 export const removeRemote = id => rest(`projects?id=eq.${encodeURIComponent(id)}`, { method: "DELETE" });
 
 // Perfil: expresiones y poses guardadas viajan con la cuenta

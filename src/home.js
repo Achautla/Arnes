@@ -6,7 +6,7 @@ export function createHome({ store, onOpen, makeExample, makeBlank, onLogin }) {
   const el = document.createElement("div");
   el.id = "home"; el.hidden = true; el.setAttribute("role", "dialog"); el.setAttribute("aria-label", "Mis proyectos");
   document.body.appendChild(el);
-  let screen = "projects", busy = false, msg = "", confirmDel = null, remote = [], lastEmail = "";
+  let screen = "projects", busy = false, msg = "", confirmDel = null, confirmAcct = false, remote = [], lastEmail = "";
   const skipped = () => sessionStorage.getItem("arnes-offline") === "1";
 
   async function show(note = "") {
@@ -49,8 +49,9 @@ export function createHome({ store, onOpen, makeExample, makeBlank, onLogin }) {
     const cur = store.project?.id;
     el.innerHTML = `<div class="home-in">${head}
       <div class="home-bar"><h2>Mis proyectos</h2>
-        <span class="acct">${cloud.configured() ? (u ? `${esc(u.email)} · <button class="linkbtn" data-h="out">Salir</button>` : `<button class="linkbtn" data-h="login">Entrar a la nube</button>`) : `<small>Guardado en este dispositivo${cloud.reachable() ? "" : " · la nube funciona en la versión de GitHub Pages"}</small>`}</span></div>
+        <span class="acct">${cloud.configured() ? (u ? `${esc(u.email)} · <button class="linkbtn" data-h="out">Salir</button> · <button class="linkbtn" data-h="delacct">Borrar mi cuenta</button>` : `<button class="linkbtn" data-h="login">Entrar a la nube</button>`) : `<small>Guardado en este dispositivo${cloud.reachable() ? "" : " · la nube funciona en la versión de GitHub Pages"}</small>`}</span></div>
       <div class="row"><button class="btn accent" data-h="new">Nuevo proyecto</button><button class="btn" data-h="example">Abrir el ejemplo</button>${cur ? `<button class="btn" data-h="back">Volver al que tenía abierto</button>` : ""}</div>
+      ${confirmAcct ? `<p class="pconf">¿Borrar tu cuenta y todo lo que guardaste en la nube (proyectos, poses, personajes y estilos)? Lo guardado en este dispositivo se queda. <button class="btn danger" data-h="delacct-yes">Borrar mi cuenta</button><button class="btn" data-h="delacct-no">Conservar mi cuenta</button></p>` : ""}
       <p class="hmsg" role="status">${esc(msg)}</p>
       <ul class="plist">${list.map(e => `<li class="pcard${e.id === cur ? " cur" : ""}">
         <button class="pmain" data-h="open" data-id="${e.id}"><strong>${esc(e.name)}</strong><small>${e.vinetas} viñeta${e.vinetas === 1 ? "" : "s"}${e.pages ? ` · ${e.pages} página${e.pages === 1 ? "" : "s"}` : ""} · ${when(e.updated)}${(() => { const r = remote.find(x => x.id === e.id); return !u ? "" : !r ? " · solo en este dispositivo" : Date.parse(r.updated_at) > e.updated + 2000 ? " · hay una versión más nueva en la nube" : " · en la nube"; })()}</small></button>
@@ -83,6 +84,9 @@ export function createHome({ store, onOpen, makeExample, makeBlank, onLogin }) {
       if (a === "fb") { busy = true; draw(); location.href = cloud.oauthUrl("facebook"); return; }
       if (a === "offline") { sessionStorage.setItem("arnes-offline", "1"); screen = "projects"; return draw(); }
       if (a === "login") { screen = "login"; return draw(); }
+      if (a === "delacct") { confirmAcct = true; return draw(); }
+      if (a === "delacct-no") { confirmAcct = false; return draw(); }
+      if (a === "delacct-yes") { confirmAcct = false; await cloud.deleteAccount(); remote = []; msg = "Tu cuenta y tus datos de la nube se borraron."; return draw(); }
       if (a === "out") { cloud.signOut(); remote = []; return draw(); }
       if (a === "back") return open(null);
       if (a === "new") return open(makeBlank());
