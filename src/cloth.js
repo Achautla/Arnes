@@ -15,10 +15,10 @@ export const MATERIALS = {
 
 // largo: 0..1 (faldas y capas: de la cadera al tobillo) · manga: 0 sin manga, 0.3 corta, 1 larga
 export const GARMENTS = {
-  camisa: { label: "Camisa", layer: 1, color: "#e6e1d6", mat: "medio", sleeve: 1, collar: "bajo" },
-  pantalon: { label: "Pantalón", layer: 2, color: "#3d4048", mat: "rigido", length: 1 },
-  saco: { label: "Saco", layer: 3, color: "#4b4744", mat: "rigido", sleeve: 1, collar: "bajo" },
-  gabardina: { label: "Gabardina", layer: 4, color: "#8b7b62", mat: "rigido", sleeve: 1, length: 0.72, collar: "alzado", belt: true },
+  camisa: { label: "Camisa", layer: 1, color: "#e6e1d6", mat: "medio", sleeve: 1, collar: "bajo", buttons: true, cuffs: true },
+  pantalon: { label: "Pantalón", layer: 2, color: "#3d4048", mat: "rigido", length: 1, hem: false },
+  saco: { label: "Saco", layer: 3, color: "#4b4744", mat: "rigido", sleeve: 1, collar: "bajo", open: false, lapels: true, buttons: true, cuffs: false },
+  gabardina: { label: "Gabardina", layer: 4, color: "#8b7b62", mat: "rigido", sleeve: 1, length: 0.72, collar: "alzado", belt: true, open: false, lapels: true, buttons: true, cuffs: false },
   vestido: { label: "Vestido", layer: 1, color: "#6d3038", mat: "suelto", sleeve: 0.3, length: 0.55 },
   falda: { label: "Falda", layer: 2, color: "#3f4a5c", mat: "medio", length: 0.5 },
   capa: { label: "Capa", layer: 5, color: "#2b2a2f", mat: "suelto", length: 0.8, collar: "bajo" },
@@ -31,7 +31,7 @@ let gid = 0;
 export function newGarment(type) {
   const g = GARMENTS[type];
   const o = { id: "r" + Date.now().toString(36) + (gid++), type, color: g.color, mat: g.mat, ease: 0.9 };
-  for (const k of ["sleeve", "length", "collar", "belt"]) if (g[k] !== undefined) o[k] = g[k];
+  for (const k of ["sleeve", "length", "collar", "belt", "open", "lapels", "buttons", "cuffs", "hem"]) if (g[k] !== undefined) o[k] = g[k];
   return o;
 }
 export const defaultQuality = () => (matchMedia("(pointer: coarse)").matches || (navigator.hardwareConcurrency || 8) <= 4 ? "media" : "alta");
@@ -298,22 +298,25 @@ function buildGarment(fig, R, g, Qs) {
     p.dark = true; return p;
   };
   // falda o faldón simulado: de yTop hacia abajo, con vuelo
-  const skirt = (yTop, frac, flare, pinTo) => {
+  const skirt = (yTop, frac, flare, pinTo, open = false) => {
+    const gap = open ? 0.32 : 0; // abierta al frente: la tela arranca y termina a los lados del frente
+    const ang = (c, cols) => open ? gap + (c / (cols - 1)) * (Math.PI * 2 - 2 * gap) : (c / cols) * Math.PI * 2;
     const ankle = P.ankle_L.y, len = Math.max(0.08, (yTop - ankle) * frac + 0.02);
     const rows = Math.max(6, Math.round(len / (step * 1.6))), cols = Math.round((around + 12) * 0.9);
     const base = [];
     for (let c = 0; c < cols; c++) {
-      const a = (c / cols) * Math.PI * 2, dir = new THREE.Vector3(Math.sin(a), 0, Math.cos(a));
+      const a = ang(c, cols), dir = new THREE.Vector3(Math.sin(a), 0, Math.cos(a));
       const r = Math.max(R.radius(new THREE.Vector3(0, yTop, 0), dir, ["hips", "spine1", "hip_L", "hip_R"]), 0.05);
       base.push(r + ease + 0.006);
     }
     for (let pass = 0; pass < 4; pass++) for (let c = 0; c < cols; c++) base[c] = Math.max(base[c], 0.5 * (base[(c + cols - 1) % cols] + base[(c + 1) % cols]));
+    if (open) { base[0] += 0.004; base[cols - 1] += 0.004; }
     const legSpan = d.hw + 0.05 * H * t + ease;
     const pinRows = 2;
     return sheetPart(R, {
-      name: "falda", rows, cols, closed: true, mat: M, pinRows, seed: M.folds,
+      name: "falda", rows, cols, closed: !open, mat: M, pinRows, seed: M.folds,
       restAt: (r, c) => {
-        const a = (c / cols) * Math.PI * 2, v = r / (rows - 1), y = yTop - v * len;
+        const a = ang(c, cols), v = r / (rows - 1), y = yTop - v * len;
         const out = Math.max(0, v * len - 0.02) * flare;
         // el ancho mínimo cubre las dos piernas; una onda pequeña siembra los pliegues
         const rr = Math.max(base[c] + out, r >= pinRows ? legSpan * (Math.abs(Math.sin(a)) * 0.9 + 0.35) : 0) * (1 + (r >= pinRows ? 0.03 * Math.sin(a * M.folds) * v : 0));
@@ -357,7 +360,7 @@ function buildGarment(fig, R, g, Qs) {
     case "gabardina":
       parts.push(torso(d.hipJY - 0.01 * H, d.neckY - 0.004 * H)); if (g.sleeve > 0.05) parts.push(sleeve("L", g.sleeve), sleeve("R", g.sleeve));
       parts.push(collar(g.collar === "alzado", g.collar === "alzado"));
-      parts.push(skirt(d.hipJY + 0.015 * H, g.length ?? 0.72, 0.16, "hips"));
+      parts.push(skirt(d.hipJY + 0.015 * H, g.length ?? 0.72, 0.16, "hips", !!g.open));
       if (g.belt) parts.push(band(P.spine1.y + 0.01 * H, 0.03 * H, 0.004)); break;
     case "vestido":
       parts.push(torso(waist - 0.01 * H, d.neckY - 0.008 * H)); if (g.sleeve > 0.05) parts.push(sleeve("L", g.sleeve), sleeve("R", g.sleeve));
@@ -375,6 +378,104 @@ function buildGarment(fig, R, g, Qs) {
     }
     case "capa": parts.push(cape(g.length ?? 0.8)); if (g.collar !== "no") parts.push(collar(g.collar === "alzado", true)); break;
   }
+  // ---- a medida: abierta, solapas, botones, puños y bastillas
+  parts.rigid = [];
+  const TORSO2 = TORSO;
+  const frontZ = y => R.radius(new THREE.Vector3(0, y, 0), new THREE.Vector3(0, 0, 1), TORSO2) + ease;
+  const ownerAt = y => ["neck1", "chest", "spine3", "spine2", "spine1", "hips"].find(j => P[j].y <= y) || "hips";
+  const rigid = (joint, mesh, x, y, z) => { mesh.position.set(x - P[joint].x, y - P[joint].y, z - P[joint].z); parts.rigid.push({ joint, mesh }); return mesh; };
+  const torsoPart = parts.find(p => p.name === "torso");
+  if (g.open && torsoPart && (g.type === "saco" || g.type === "gabardina")) {
+    const gap = 0.3, ix = torsoPart.geo.index.array, keep = [];
+    for (let k = 0; k < ix.length; k += 3) {
+      const near = [ix[k], ix[k + 1], ix[k + 2]].some(i => { const a = torsoPart.av[i]; const w = Math.min(a, Math.PI * 2 - a); return w < gap && torsoPart.rest[i * 3 + 1] < d.chestY + 0.02 * H; });
+      if (!near) keep.push(ix[k], ix[k + 1], ix[k + 2]);
+    }
+    torsoPart.geo.setIndex(keep);
+  }
+  if (g.lapels && torsoPart) {
+    const yTop = d.neckY - 0.01 * H, yBot = g.open ? d.chestY - 0.05 * H : d.chestY - 0.01 * H;
+    for (const sd of [1, -1]) {
+      const sh = new THREE.Shape([new THREE.Vector2(0, 0), new THREE.Vector2(sd * 0.07 * H * t, 0.03 * H), new THREE.Vector2(sd * 0.03 * H * t, yTop - yBot), new THREE.Vector2(sd * 0.004, yTop - yBot - 0.01 * H)]);
+      const m = new THREE.Mesh(new THREE.ShapeGeometry(sh), null); m.userData.dark = false;
+      const y = yBot, z = frontZ(d.chestY) + 0.004;
+      m.rotation.y = sd * 0.18;
+      rigid("chest", m, sd * (g.open ? 0.035 : 0.006) * H * t, y, z);
+    }
+  }
+  if (g.buttons && !g.open && torsoPart) {
+    const yTop = d.neckY - 0.05 * H, yBot = g.type === "camisa" ? P.spine1.y : d.hipJY + 0.01 * H, n = g.type === "camisa" ? 6 : 4;
+    for (let i = 0; i < n; i++) {
+      const y = yTop - (i / (n - 1)) * (yTop - yBot);
+      const m = new THREE.Mesh(new THREE.CylinderGeometry(0.0055, 0.0055, 0.003, 12), null); m.rotation.x = Math.PI / 2; m.userData.dark = true;
+      rigid(ownerAt(y), m, 0, y, frontZ(y) + 0.002);
+    }
+  }
+  if (g.cuffs && (g.sleeve ?? 0) > 0.9) for (const sd of ["L", "R"]) {
+    const wr = P["wrist_" + sd];
+    const p = tubePart(R, { name: "puno_" + sd, axis: [wr.clone().add(new THREE.Vector3(0, 0.05, 0)), wr.clone().add(new THREE.Vector3(0, 0.004, 0))], N: Z, measure: () => ["elbow_" + sd], chain: [{ name: "elbow_" + sd, s: 0 }], ease: ease + 0.006, around, step: 0.012, W: 0.01, minR: 0.02 });
+    p.dark = true; parts.push(p);
+  }
+  if (g.hem && g.type === "pantalon" && (g.length ?? 1) > 0.9) for (const sd of ["L", "R"]) {
+    const an = P["ankle_" + sd];
+    const p = tubePart(R, { name: "bastilla_" + sd, axis: [an.clone().add(new THREE.Vector3(0, 0.05, 0)), an.clone().add(new THREE.Vector3(0, 0.006, 0))], N: Z, measure: () => ["knee_" + sd], chain: [{ name: "knee_" + sd, s: 0 }], ease: ease + 0.009, around, step: 0.012, W: 0.01, minR: 0.03 });
+    p.dark = true; parts.push(p);
+  }
+  return parts;
+}
+
+// ------------------------------------------------------------------ cabello
+export const HAIR_STYLES = {
+  ninguno: "Sin cabello", rapado: "Rapado", corto: "Corto", rizado: "Rizado", afro: "Afro", chongo: "Chongo",
+  cola: "Cola de caballo", trenza: "Trenza", largo: "Largo suelto", melena: "Melena", mechon: "Corto con mechón",
+};
+function buildHair(fig, R, hair, Qs) {
+  const parts = []; parts.rigid = [];
+  if (!hair || !hair.style || hair.style === "ninguno") return parts;
+  const d = fig.d, hh = d.hh, H = d.H, P = R.pos, head = P.head;
+  const rx = hh * 0.335, ry = hh * 0.48, rz = hh * 0.41, cy = hh * 0.52, cz = -0.01 * hh;
+  const vol = hair.volume ?? 0.5, len = hair.length ?? 0.5, M = MATERIALS.suelto;
+  const c = new THREE.Vector3(head.x, head.y + cy, head.z + cz); // centro del cráneo en reposo
+  const rigid = mesh => { mesh.position.sub(head); parts.rigid.push({ joint: "head", mesh }); return mesh; };
+  const shell = (k, theta, tilt) => {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(1, 36, 20, 0, Math.PI * 2, 0, theta), null);
+    m.scale.set(rx * k, ry * k, rz * k); m.rotation.x = tilt; m.position.copy(c); return rigid(m);
+  };
+  const st = hair.style, k = 1.035 + (st === "rapado" ? 0.005 : 0.03 + 0.06 * vol);
+  if (st !== "afro") shell(k, st === "rapado" ? Math.PI * 0.5 : Math.PI * 0.58, -0.42);
+  if (st === "afro") shell(1.25 + 0.35 * vol, Math.PI * 0.62, -0.35);
+  if (st === "rizado") for (let i = 0; i < 46; i++) {
+    const u = i * 2.399, w = Math.acos(1 - (i + 0.5) / 46 * 1.1); // reparto sobre la parte de arriba
+    if (w > Math.PI * 0.58) continue;
+    const dir = new THREE.Vector3(Math.sin(w) * Math.sin(u), Math.cos(w), Math.sin(w) * Math.cos(u)).applyAxisAngle(new THREE.Vector3(1, 0, 0), -0.42);
+    const b = new THREE.Mesh(new THREE.SphereGeometry(hh * (0.06 + 0.03 * vol), 10, 8), null);
+    b.position.copy(c).add(new THREE.Vector3(dir.x * rx * k, dir.y * ry * k, dir.z * rz * k)); rigid(b);
+  }
+  if (st === "chongo") { const b = new THREE.Mesh(new THREE.SphereGeometry(hh * (0.14 + 0.06 * vol), 20, 14), null); b.position.copy(c).add(new THREE.Vector3(0, ry * 0.7, -rz * 0.75)); rigid(b); }
+  if (st === "mechon") { const b = new THREE.Mesh(new THREE.SphereGeometry(hh * 0.11, 14, 10), null); b.scale.set(1.3, 0.5, 0.8); b.position.copy(c).add(new THREE.Vector3(rx * 0.3, ry * 0.78, rz * 0.62)); b.rotation.z = 0.5; rigid(b); }
+  // mechones que cuelgan: se simulan como tela
+  const hangSheet = (name, a0, a1, yTop, length, rad, closed, cols) => {
+    const rows = Math.max(6, Math.round(length / (Qs.step * 1.4)));
+    return sheetPart(R, {
+      name, rows, cols, closed, mat: M, pinRows: 2, seed: 9,
+      restAt: (r, cc) => {
+        const u = closed ? cc / cols : cc / (cols - 1), a = closed ? u * Math.PI * 2 : a0 + (a1 - a0) * u, v = r / (rows - 1);
+        const y = yTop - v * length, grow = closed ? 1 + 0.15 * v : 1 + 0.25 * v;
+        return closed ? new THREE.Vector3(c.x + Math.sin(a) * rad * grow, y, c.z - rz * 1.05 + Math.cos(a) * rad * grow)
+          : new THREE.Vector3(c.x + Math.sin(a) * rx * rad * grow, y, c.z + Math.cos(a) * rz * rad * grow);
+      },
+      weightAt: () => new Map([["head", 1]]),
+    });
+  };
+  const L = hh * (0.6 + 2.6 * len); // largo desde la nuca
+  if (st === "largo" || st === "melena") {
+    const p = hangSheet("cabello", Math.PI * 0.36, Math.PI * 1.64, c.y + ry * 0.25, st === "melena" ? Math.min(L, hh * 1.2) : L, k + 0.02, false, 22);
+    p.hair = true; parts.push(p);
+  }
+  if (st === "cola" || st === "trenza") {
+    const p = hangSheet("cola", 0, 0, c.y + ry * 0.2, L, hh * (st === "trenza" ? 0.05 : 0.08 + 0.04 * vol), true, 10);
+    p.hair = true; parts.push(p);
+  }
   return parts;
 }
 
@@ -383,7 +484,14 @@ export function dress(fig, clothes, opts = {}) {
   const Qs = Q[opts.quality || defaultQuality()];
   const R = restCapture(fig);
   let garments;
-  try { garments = clothes.map(g => ({ g, parts: buildGarment(fig, R, g, Qs) })); }
+  try {
+    garments = clothes.map(g => ({ g, parts: buildGarment(fig, R, g, Qs) }))
+      .sort((a, b) => (GARMENTS[a.g.type]?.layer || 0) - (GARMENTS[b.g.type]?.layer || 0));
+    if (opts.hair && opts.hair.style && opts.hair.style !== "ninguno") {
+      const hp = buildHair(fig, R, opts.hair, Qs);
+      garments.push({ g: { id: "cabello", type: "cabello", color: opts.hair.color || "#2b2522", mat: "suelto", hair: true }, parts: hp });
+    }
+  }
   finally { R.restore(); }
   const group = new THREE.Group(); group.name = "ropa"; group.userData.clothRoot = true;
   const bindInv = R.bind, R0 = R.pos;
@@ -396,6 +504,13 @@ export function dress(fig, clothes, opts = {}) {
     p.mesh = m; p.g = g; group.add(m);
   }
   fig.root.add(group);
+  // piezas rígidas (solapas, botones, cabello): van dentro de su articulación
+  const rigids = [];
+  for (const { g, parts } of garments) for (const r of parts.rigid || []) {
+    r.mesh.material = clothMat(r.mesh.userData.dark ? shade(g.color) : g.color, useColor, false);
+    r.mesh.castShadow = r.mesh.receiveShadow = true; r.mesh.userData.cloth = true; r.mesh.userData.joint = r.joint; r.mesh.userData.rigidOf = g.id;
+    fig.joints[r.joint].add(r.mesh); rigids.push({ g, mesh: r.mesh });
+  }
   // Lo que la ropa cubre del maniquí se oculta: así ninguna articulación asoma por la tela
   const covered = new Set();
   for (const { g, parts } of garments) for (const p of parts) {
@@ -467,7 +582,35 @@ export function dress(fig, clothes, opts = {}) {
     arr[i] = _p.x; arr[i + 1] = _p.y; arr[i + 2] = _p.z;
     return hit;
   }
-  function simulate(p, steps, reset, caps, floorY, windV) {
+  // superficie de una tela ya simulada, en una rejilla para buscar rápido el punto más cercano
+  function surfaceOf(p) {
+    const N = p.rows * p.cols, cell = 0.05, grid = new Map(), P = p.pos, nr = p.geo.attributes.normal.array;
+    const hip = new THREE.Vector3().setFromMatrixPosition(tmp.multiplyMatrices(rootInv, fig.joints.hips.matrixWorld));
+    const nrm = new Float32Array(N * 3);
+    for (let i = 0; i < N; i++) {
+      let nx = nr[i * 3], ny = nr[i * 3 + 1], nz = nr[i * 3 + 2];
+      if (nx * (P[i * 3] - hip.x) + nz * (P[i * 3 + 2] - hip.z) < 0) { nx = -nx; ny = -ny; nz = -nz; } // hacia afuera del cuerpo
+      nrm[i * 3] = nx; nrm[i * 3 + 1] = ny; nrm[i * 3 + 2] = nz;
+      const key = Math.floor(P[i * 3] / cell) + "," + Math.floor(P[i * 3 + 1] / cell) + "," + Math.floor(P[i * 3 + 2] / cell);
+      (grid.get(key) || grid.set(key, []).get(key)).push(i);
+    }
+    return { P: P.slice(), nrm, grid, cell };
+  }
+  function pushOut(arr, i, surfs, thick) {
+    for (const S of surfs) {
+      const x = arr[i], y = arr[i + 1], z = arr[i + 2], gx = Math.floor(x / S.cell), gy = Math.floor(y / S.cell), gz = Math.floor(z / S.cell);
+      let best = -1, bd = 0.0025;
+      for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let c2 = -1; c2 <= 1; c2++) {
+        const list = S.grid.get((gx + a) + "," + (gy + b) + "," + (gz + c2)); if (!list) continue;
+        for (const j of list) { const dx = x - S.P[j * 3], dy = y - S.P[j * 3 + 1], dz = z - S.P[j * 3 + 2], dd = dx * dx + dy * dy + dz * dz; if (dd < bd) { bd = dd; best = j; } }
+      }
+      if (best < 0) continue;
+      const nx = S.nrm[best * 3], ny = S.nrm[best * 3 + 1], nz = S.nrm[best * 3 + 2];
+      const dist = (x - S.P[best * 3]) * nx + (y - S.P[best * 3 + 1]) * ny + (z - S.P[best * 3 + 2]) * nz;
+      if (dist < thick) { const k = thick - dist; arr[i] += nx * k; arr[i + 1] += ny * k; arr[i + 2] += nz * k; }
+    }
+  }
+  function simulate(p, steps, reset, caps, floorY, windV, surfs = []) {
     const N = p.rows * p.cols, C = p.cols, pin = p.pinRows * C, dt = 1 / 60, g = 9.8 * dt * dt;
     skinTo(p, p.target);
     if (reset) { p.cur.set(p.target); p.prev.set(p.target); }
@@ -497,6 +640,7 @@ export function dress(fig, clothes, opts = {}) {
           // fricción: la tela apoyada en el cuerpo casi no resbala
           const k = i * 3; p.prev[k] += (p.cur[k] - p.prev[k]) * 0.7; p.prev[k + 1] += (p.cur[k + 1] - p.prev[k + 1]) * 0.7; p.prev[k + 2] += (p.cur[k + 2] - p.prev[k + 2]) * 0.7;
         }
+        if (surfs.length && it === iters - 1) for (let i = pin; i < N; i++) pushOut(p.cur, i * 3, surfs, 0.011);
       }
       // fricción con el piso: la tela que toca el suelo se queda quieta
       for (let i = pin; i < N; i++) if (p.cur[i * 3 + 1] <= floorY + 1e-4) { p.prev[i * 3] = p.cur[i * 3]; p.prev[i * 3 + 2] = p.cur[i * 3 + 2]; }
@@ -607,7 +751,7 @@ export function dress(fig, clothes, opts = {}) {
       if (twist > 30) out.push({ at: W("spine2"), type: "espiral" });
       else if (bend > 35) out.push({ at: W("spine1"), type: "zigzag" });
     }
-    for (const { parts } of garments) for (const p of parts) if (p.kind === "sheet") {
+    for (const { g, parts } of garments) for (const p of parts) if (p.kind === "sheet" && !g.hair) {
       const N = p.rows * p.cols; let n = 0; const c = new THREE.Vector3(), floorY = floorLocal() + 0.012;
       for (let i = 0; i < N; i++) if (p.pos[i * 3 + 1] < floorY) { n++; c.x += p.pos[i * 3]; c.y += p.pos[i * 3 + 1]; c.z += p.pos[i * 3 + 2]; }
       const hem = (p.rows - 1) * p.cols + Math.floor(p.cols / 2);
@@ -632,16 +776,21 @@ export function dress(fig, clothes, opts = {}) {
     handle.caps = caps;
     const ry = -fig.root.rotation.y, wa = windDir * Math.PI / 180;
     const windV = new THREE.Vector3(Math.sin(wa), 0.15, Math.cos(wa)).applyAxisAngle(new THREE.Vector3(0, 1, 0), ry).multiplyScalar(wind * 9);
+    const surfs = [];
     for (const { g, parts } of garments) {
       const M = MATERIALS[g.mat] || MATERIALS.medio;
+      // las capas de encima chocan con un cuerpo "más grueso" (lo que llevan debajo) y con las telas sueltas de abajo
+      const layer = GARMENTS[g.type]?.layer || 0, capsL = layer > 2 ? caps.map(([a, b, r]) => [a, b, r + 0.004 * (layer - 2)]) : caps;
+      const mine = [];
       for (const p of parts) {
-        if (p.kind === "sheet") simulate(p, mode === "settle" ? Qs.steps : 4, mode === "settle" || !p.started, caps, floorY, windV), p.started = true;
+        if (p.kind === "sheet") { simulate(p, mode === "settle" ? Qs.steps : 4, mode === "settle" || !p.started, capsL, floorY, windV, g.hair ? [] : surfs); p.started = true; mine.push(p); }
         else skinTo(p, p.pos);
         const twist = p.name.startsWith("manga") ? Math.sign(readJoint(fig, "elbow_" + p.name.slice(-1))[1]) * Math.min(3, Math.abs(readJoint(fig, "elbow_" + p.name.slice(-1))[1]) / 25) : 0;
         foldsOn(p, M, twist);
         p.geo.attributes.position.needsUpdate = true; p.geo.computeVertexNormals(); p.geo.computeBoundingSphere();
         if (showMap) colorMap(p, baseCol);
       }
+      if (!g.hair) for (const p of mine) surfs.push(surfaceOf(p));
     }
     if (mode === "settle") classify();
     sig = signature(); settled = mode === "settle";
@@ -657,10 +806,11 @@ export function dress(fig, clothes, opts = {}) {
     if (color !== undefined) useColor = color;
     if (map !== undefined) showMap = map;
     for (const { g, parts } of garments) for (const p of parts) p.mesh.material = clothMat(p.dark ? shade(g.color) : g.color, useColor, showMap);
+    for (const r of rigids) r.mesh.material = clothMat(r.mesh.userData.dark ? shade(r.g.color) : r.g.color, useColor, false);
     if (showMap) for (const { parts } of garments) for (const p of parts) colorMap(p, baseCol);
   }
   function setWind(w, dir) { wind = w; windDir = dir; update("settle"); }
-  function dispose() { for (const m of hidden) m.visible = true; fig.root.remove(group); for (const { parts } of garments) for (const p of parts) p.geo.dispose(); }
+  function dispose() { for (const m of hidden) m.visible = true; for (const r of rigids) { r.mesh.parent?.remove(r.mesh); r.mesh.geometry.dispose(); } fig.root.remove(group); for (const { parts } of garments) for (const p of parts) p.geo.dispose(); }
   const handle = { group, update, tick, setStyle, setWind, dispose, labels: () => labels, garments };
   update("settle");
   return handle;

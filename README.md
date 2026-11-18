@@ -2,6 +2,14 @@
 
 Storyboard 3D para cómic: posar personajes, colocar cámaras y luces, y obtener un semirender (volumen, sombras y valores) para dibujar a lápiz.
 
+## Fase 3 · bloque 2, entregas 5 a 8 (18-nov)
+
+- **Tela sobre tela**: las telas sueltas chocan con las de capas de abajo (capa sobre gabardina) y las capas de encima respetan el grosor de lo que llevan debajo.
+- **Accesorios y joyería** (29 piezas en 9 zonas): sombreros, lentes, aretes, cadenas, dijes, gargantilla, bufanda, corbata, moño, reloj, pulseras de cuero e hilo, brazalete, pulso, anillos, solitario, sello, guantes, zapatos, botas, tenis y cinturón; con color, material, lado, dedo y tamaño. Catálogo de datos (`src/accessories.js`) listo para editarse en la Fase 6.
+- **Cabello**: rapado, corto, rizado, afro, chongo, cola, trenza, largo, melena y mechón; color, volumen y largo; el pelo largo, la cola y la trenza se simulan y responden al viento.
+- **A medida**: abierta al frente, solapas, botones, puños y bastilla.
+- **Personajes guardados**: cuerpo, rostro, cabello, ropa y accesorios; viajan con la cuenta.
+
 ## Cierre de Fase 2 (18-nov)
 
 - **Notas de luz** (Luz → Semirender): zona iluminada, terminador, sombra propia, sombra proyectada, luz reflejada y sin luz directa, calculadas con la luz principal.
@@ -64,6 +72,7 @@ Para probarla en tu computadora sin publicar: `python -m http.server` en esta ca
 - `src/poses.js`, `src/props.js`, `src/props2.js`, `src/lights.js`: biblioteca de poses, utilería, terreno, luces, presets y gobos.
 - `src/scenarios.js`: escenarios armados. `src/scenes.js`: escenas fuera del visor (miniaturas de página y exportación).
 - `src/share.js`: enlace de solo lectura comprimido.
+- `src/accessories.js`: catálogo de accesorios y joyería.
 - `src/cloth.js`: ropa, simulación de tela, pliegues y clasificación de pliegues.
 - `src/page.js`: editor de página. `src/home.js`: inicio y mis proyectos. `src/cloud.js`, `src/cloud-config.js`: nube (Supabase por REST).
 - `src/render.js`: semirender (valores, contorno, líneas azules) y exportación a imagen.

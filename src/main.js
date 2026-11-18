@@ -15,7 +15,8 @@ import { Store, ASPECTS, newVineta, defaultView, defaultCamera } from "./store.j
 import { buildExample } from "./example.js";
 import { createHome } from "./home.js";
 import * as share from "./share.js";
-import { dress, GARMENTS, MATERIALS, FOLD_TYPES, newGarment } from "./cloth.js";
+import { dress, GARMENTS, MATERIALS, FOLD_TYPES, newGarment, HAIR_STYLES } from "./cloth.js";
+import { equip, ACCESSORIES, MATERIALS as ACC_MATS, FINGER_NAMES, newAccessory } from "./accessories.js";
 import * as cloud from "./cloud.js";
 
 const PAPER = 0xf1f0ec, DARK = 0x111214, BLUE = 0x7cc0ea, BLUE_DEEP = 0x3e7fb0;
@@ -131,7 +132,8 @@ function buildObject(o) {
     figs.set(o.id, fig);
     g = fig.root;
     g.position.fromArray(o.pos); g.rotation.set(0, (o.rotY || 0) * DEG, 0);
-    if (o.clothes?.length) dressFig(o, fig);
+    if (o.clothes?.length || hasHair(o)) dressFig(o, fig);
+    if (o.accessories?.length) fig.acc = equip(fig, o.accessories, { useColor: store.v.view.mode !== "clay" });
   } else {
     g = buildProp(o.type, o.params);
     g.position.fromArray(o.pos);
@@ -150,9 +152,10 @@ function dressFig(o, fig) {
   const v = store.v.view;
   fig.root.updateMatrixWorld(true);
   fig.dress?.dispose();
-  fig.dress = o.clothes?.length ? dress(fig, o.clothes, { quality: v.clothQ, useColor: v.mode !== "clay", map: !!v.tension, wind: v.wind || 0, windDir: v.windDir || 0 }) : null;
+  fig.dress = o.clothes?.length || hasHair(o) ? dress(fig, o.clothes || [], { hair: o.hair, quality: v.clothQ, useColor: v.mode !== "clay", map: !!v.tension, wind: v.wind || 0, windDir: v.windDir || 0 }) : null;
   fig.root.traverse(c => { c.userData.objId = o.id; });
 }
+const hasHair = o => !!(o.hair && o.hair.style && o.hair.style !== "ninguno");
 const defaultClothQ = matchMedia("(pointer: coarse)").matches || (navigator.hardwareConcurrency || 8) <= 4 ? "media" : "alta";
 const OUTFITS = {
   noir: { label: "Detective noir", items: ["pantalon", "camisa", "gabardina"] },
@@ -193,7 +196,7 @@ function applyBackground() {
 }
 function repaintAll() {
   const useColor = store.v.view.mode !== "clay";
-  for (const f of figs.values()) f.dress?.setStyle({ color: useColor, map: !!store.v.view.tension });
+  for (const f of figs.values()) { f.dress?.setStyle({ color: useColor, map: !!store.v.view.tension }); f.acc?.setStyle(useColor); }
   for (const o of store.v.objects) { const g = world.get(o.id); if (g) paint(g, o.color || null, useColor); }
 }
 // Formas básicas: cajas de construcción sobre cada parte del cuerpo (ayuda para dibujar)
@@ -851,6 +854,9 @@ function panelEscena() {
   <div class="vlist">${P.vinetas.map((x, i) => `<button class="vitem${i === P.cur ? " on" : ""}" data-act="vineta" data-val="${i}"><b>${i + 1}</b><span>${esc(x.name)}</span></button>`).join("")}</div>
   <div class="row"><button class="btn" data-act="v-dup">Duplicar viñeta</button><button class="btn" data-act="v-new">Nueva vacía</button></div>
   <div class="row"><input class="text" id="vname" value="${esc(v.name)}" aria-label="Nombre de la viñeta"><button class="btn" data-act="v-ren">Renombrar</button><button class="btn danger" data-act="v-del" ${P.vinetas.length < 2 ? "disabled" : ""}>Borrar</button></div>`;
+  const chars = savedChars();
+  if (chars.length) h += `<h2>Tus personajes</h2><div class="adds">${chars.map((c, i) => `<button class="btn" data-act="char-add" data-val="${i}">+ ${esc(c.name)}</button>`).join("")}</div>
+    <details class="more"><summary>Administrar</summary><div class="adds">${chars.map((c, i) => `<button class="btn danger" data-act="char-del" data-val="${i}">Borrar ${esc(c.name)}</button>`).join("")}</div></details>`;
   h += `<h2>Agregar</h2><div class="adds"><button class="btn accent" data-act="add-fig">+ Personaje</button>
     ${Object.entries(PRIMITIVES).map(([k, d]) => `<button class="btn" data-act="add" data-val="${k}">${d.label}</button>`).join("")}</div>
     <details class="more"><summary>Utilería (${Object.keys(PROPS).length + Object.keys(EXTRA_PROPS).length})</summary><div class="adds">${Object.entries({ ...PROPS, ...EXTRA_PROPS }).map(([k, d]) => `<button class="btn" data-act="add" data-val="${k}">${d.label}</button>`).join("")}</div></details>
@@ -900,12 +906,38 @@ function clothesPanel(o) {
       ${g.length !== undefined ? slider("length", g.type === "pantalon" ? "Largo (corto ↔ al tobillo)" : "Largo (cadera ↔ tobillo)", g.length, g.type === "pantalon" ? 0.3 : 0.15, 1, 0.01, "", "garment") : ""}
       ${g.sleeve !== undefined ? slider("sleeve", "Manga (sin manga ↔ larga)", g.sleeve, 0, 1, 0.01, "", "garment") : ""}
       ${g.collar !== undefined ? `<h3>Cuello</h3><div class="pills">${[["bajo", "Normal"], ["alzado", "Alzado"], ["no", "Sin cuello"]].map(([k, l]) => pill(k, g.collar, l, "garment-collar")).join("")}</div>` : ""}
-      ${g.belt !== undefined ? `<div class="toggles">${toggle("belt", "Cinturón", "", g.belt, "garment-t")}</div>` : ""}
+      <div class="toggles">${g.belt !== undefined ? toggle("belt", "Cinturón", "", g.belt, "garment-t") : ""}${g.open !== undefined ? toggle("open", "Abierta al frente", "Deja ver lo que lleva debajo", g.open, "garment-t") : ""}${g.lapels !== undefined ? toggle("lapels", "Solapas", "", g.lapels, "garment-t") : ""}${g.buttons !== undefined ? toggle("buttons", "Botones", "Solo cuando va cerrada", g.buttons, "garment-t") : ""}${g.cuffs !== undefined ? toggle("cuffs", "Puños", "Con manga larga", g.cuffs, "garment-t") : ""}${g.hem !== undefined ? toggle("hem", "Bastilla doblada", "", g.hem, "garment-t") : ""}</div>
       <div class="row"><button class="btn" data-act="garment-up">Subir de capa</button><button class="btn danger" data-act="garment-del">Quitar ${def.label.toLowerCase()}</button></div></div>`;
   }
   if (list.length) h += `<div class="row"><button class="btn" data-act="garment-copy">Copiar ropa a los demás personajes</button></div>`;
+  // Cabello
+  const hr = o.hair || { style: "ninguno" };
+  h += `<h3>Cabello</h3><div class="pills">${Object.entries(HAIR_STYLES).map(([k, l]) => pill(k, hr.style, l, "hair-style")).join("")}</div>`;
+  if (hasHair(o)) h += `<div class="row colorrow"><label class="sel"><span>Color del cabello</span><input type="color" data-act="hair-color" value="${hr.color || "#2b2522"}"></label></div>
+    ${slider("volume", "Volumen", hr.volume ?? 0.5, 0, 1, 0.05, "", "hair")}${["largo", "melena", "cola", "trenza"].includes(hr.style) ? slider("length", "Largo", hr.length ?? 0.5, 0, 1, 0.05, "", "hair") : ""}`;
+  // Accesorios y joyería
+  const acc = o.accessories || [];
+  const cats = [...new Set(Object.values(ACCESSORIES).map(a => a.cat))];
+  h += `<h3>Accesorios y joyería</h3><details class="more"><summary>Catálogo (${Object.keys(ACCESSORIES).length})</summary>${cats.map(c => `<p class="pl">${c}</p><div class="adds">${Object.entries(ACCESSORIES).filter(([, a]) => a.cat === c).map(([k, a]) => `<button class="btn" data-act="acc-add" data-val="${k}">+ ${a.label}</button>`).join("")}</div>`).join("")}</details>`;
+  if (acc.length) h += `<div class="olist">${acc.map(a => `<button class="oitem${a.id === ui.acc ? " on" : ""}" data-act="acc-sel" data-val="${a.id}"><span><i class="swatch" style="background:${a.color}"></i>${ACCESSORIES[a.type].label}</span><small>${ACC_MATS[a.mat]?.label || ""}${a.side ? " · " + ({ ambos: "ambos lados", L: "izquierda", R: "derecha" })[a.side] : ""}</small></button>`).join("")}</div>`;
+  const a = acc.find(x => x.id === ui.acc);
+  if (a) {
+    const def = ACCESSORIES[a.type];
+    h += `<div class="card sub-card"><div class="row colorrow"><label class="sel"><span>Color</span><input type="color" data-act="acc-color" value="${a.color}"></label></div>
+      <h3>Material</h3><div class="pills">${Object.entries(ACC_MATS).map(([k, m]) => pill(k, a.mat, m.label, "acc-mat")).join("")}</div>
+      ${def.side ? `<h3>Lado</h3><div class="pills">${[["ambos", "Ambos"], ["L", "Izquierda"], ["R", "Derecha"]].map(([k, l]) => pill(k, a.side, l, "acc-side")).join("")}</div>` : ""}
+      ${def.finger ? `<h3>Dedo</h3><div class="pills">${Object.entries(FINGER_NAMES).map(([k, l]) => pill(k, a.finger, l, "acc-finger")).join("")}</div>` : ""}
+      ${slider("size", "Tamaño", a.size ?? 1, 0.6, 1.6, 0.05, "×", "acc")}
+      <div class="row"><button class="btn danger" data-act="acc-del">Quitar ${def.label.toLowerCase()}</button></div></div>`;
+  }
+  // Personaje guardado
+  h += `<h3>Personaje</h3><p class="sub">Guarda cuerpo, rostro, cabello, ropa y accesorios para usar este personaje en cualquier viñeta${cloud.user() ? "; viaja con tu cuenta" : ""}.</p>
+    <div class="row"><button class="btn" data-act="char-save">Guardar como personaje</button></div>`;
   return h;
 }
+function savedChars() { try { return JSON.parse(localStorage.getItem("arnes-chars") || "[]"); } catch { return []; } }
+function writeChars(a) { try { localStorage.setItem("arnes-chars", JSON.stringify(a)); } catch { toast("Este navegador no permite guardar personajes aquí."); } syncProfile(); }
+const CHAR_KEYS = ["params", "face", "clothes", "hair", "accessories", "color", "hands"];
 
 function panelPose() {
   const o = selObj();
@@ -1201,6 +1233,29 @@ panel.addEventListener("click", e => {
       for (const f of v.objects) if (f.kind === "figure" && f !== o) { f.clothes = clone(o.clothes).map(g => ({ ...g, id: newGarment(g.type).id })); rebuildObject(f); }
       store.commit(); markDirty(3); toast("Ropa copiada. Cambia los colores para distinguir a cada personaje."); break;
     }
+    case "hair-style": { o.hair = { color: "#2b2522", volume: 0.5, length: 0.5, ...(o.hair || {}), style: val }; rebuildObject(o); store.commit(); renderPanel(); markDirty(3); break; }
+    case "acc-add": { o.accessories ??= []; const a = newAccessory(val); o.accessories.push(a); ui.acc = a.id; rebuildObject(o); store.commit(); renderPanel(); markDirty(3); break; }
+    case "acc-sel": ui.acc = ui.acc === val ? null : val; renderPanel(); break;
+    case "acc-mat": case "acc-side": case "acc-finger": {
+      const a = o.accessories.find(x => x.id === ui.acc); a[act.slice(4) === "mat" ? "mat" : act.slice(4)] = val;
+      rebuildObject(o); store.commit(); renderPanel(); markDirty(3); break;
+    }
+    case "acc-del": { o.accessories = o.accessories.filter(x => x.id !== ui.acc); ui.acc = null; rebuildObject(o); store.commit(); renderPanel(); markDirty(3); break; }
+    case "char-save": {
+      const name = prompt("Nombre del personaje", o.name); if (!name?.trim()) break;
+      const c = { name: name.trim() }; for (const k of CHAR_KEYS) if (o[k] !== undefined) c[k] = clone(o[k]);
+      const list = savedChars().filter(x => x.name !== c.name); list.push(c); writeChars(list);
+      o.name = c.name; store.commit(); renderPanel(); toast(`Personaje «${c.name}» guardado. Aparece en Escena → Tus personajes.`); break;
+    }
+    case "char-add": {
+      const c = savedChars()[+val]; if (!c) break;
+      addFigure(); const f = store.v.objects.at(-1);
+      for (const k of CHAR_KEYS) if (c[k] !== undefined) f[k] = clone(c[k]);
+      for (const g of f.clothes || []) g.id = newGarment(g.type).id;
+      for (const a of f.accessories || []) a.id = newAccessory(a.type).id;
+      f.name = c.name; rebuildObject(f); store.commit(); renderPanel(); markDirty(3); break;
+    }
+    case "char-del": { const list = savedChars(); const [c] = list.splice(+val, 1); writeChars(list); renderPanel(); toast(`Se borró «${c.name}» de tus personajes.`); break; }
     case "clothq": v.view.clothQ = val; rebuildScene(); store.commit(); renderPanel(); markDirty(3); break;
     case "terrain": { o.params.tipo = val; rebuildObject(o); applyBackground(); store.commit(); renderPanel(); markDirty(); break; }
     case "obj-nocolor": { delete o.color; paint(world.get(o.id), null); store.commit(); renderPanel(); markDirty(); break; }
@@ -1262,6 +1317,8 @@ panel.addEventListener("change", e => {
     if (act === "garment-color") g.color = el.value; else if (act === "garment") g[key] = +el.value; else g[key] = el.checked;
     rebuildObject(o); store.commit(); if (act === "garment-color") renderPanel(); markDirty(3); return;
   }
+  if (act === "hair-color" || act === "hair") { o.hair[act === "hair" ? key : "color"] = act === "hair" ? +el.value : el.value; rebuildObject(o); store.commit(); markDirty(3); return; }
+  if (act === "acc-color" || act === "acc") { const a = o.accessories.find(x => x.id === ui.acc); if (!a) return; if (act === "acc") a[key] = +el.value; else a.color = el.value; rebuildObject(o); store.commit(); if (act === "acc-color") renderPanel(); markDirty(3); return; }
   if (act === "wind") { for (const f of figs.values()) f.dress?.setWind(v.view.wind || 0, v.view.windDir || 0); store.commit(); markDirty(3); return; }
   if (act === "light-color") { const l = selLight(); l.color = el.value; rebuildLights(); attachGizmo(); store.commit(); renderPanel(); markDirty(); return; }
   if (["joint-rot", "param", "lens", "light", "view-r", "face", "fog", "roll"].includes(act)) {
@@ -1335,7 +1392,7 @@ let profTimer = 0;
 function syncProfile() {
   if (!cloud.user()) return;
   clearTimeout(profTimer);
-  profTimer = setTimeout(() => cloud.pushProfile({ expr: savedExpr(), poses: savedPoses() }).catch(() => {}), 1500);
+  profTimer = setTimeout(() => cloud.pushProfile({ expr: savedExpr(), poses: savedPoses(), chars: savedChars() }).catch(() => {}), 1500);
 }
 async function mergeProfile() {
   if (!cloud.user()) return;
@@ -1344,7 +1401,8 @@ async function mergeProfile() {
     const union = (a, b) => { const m = new Map(); for (const x of [...(b || []), ...(a || [])]) m.set(x.name || x.label || JSON.stringify(x), x); return [...m.values()]; };
     localStorage.setItem("arnes-expr", JSON.stringify(union(savedExpr(), d.expr)));
     localStorage.setItem("arnes-poses", JSON.stringify(union(savedPoses(), d.poses)));
-    await cloud.pushProfile({ expr: savedExpr(), poses: savedPoses() });
+    localStorage.setItem("arnes-chars", JSON.stringify(union(savedChars(), d.chars)));
+    await cloud.pushProfile({ expr: savedExpr(), poses: savedPoses(), chars: savedChars() });
   } catch {}
 }
 function savePose(name, o) {
