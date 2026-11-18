@@ -1,10 +1,11 @@
 // Semirender: arcilla, vista de valores, contorno y modo de líneas azules para imprimir
 import * as THREE from "three";
 
-const vert = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
+const vert = `varying vec2 vUv0; void main(){ vUv0 = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 const frag = `
 precision highp float;
-varying vec2 vUv;
+varying vec2 vUv0;
+vec2 vUv;
 uniform sampler2D tColor, tDepth, tNormal, tLit, tNdl;
 uniform mat3 camRot;
 uniform vec2 res;
@@ -16,6 +17,9 @@ uniform float dotSize, hatch, grain, lineVar;
 uniform vec3 ink, blueInk, paper, sepia, burstA, burstB;
 uniform bool burst;
 uniform vec2 focus;
+uniform int fxType;
+uniform float fxAmt, fxAng, fisheye;
+uniform vec3 fxInk;
 float lin(float d){ float z = d * 2.0 - 1.0; return (2.0 * near * far) / (far + near - z * (far - near)); }
 vec3 toSRGB(vec3 c){ return pow(max(c, 0.0), vec3(1.0/2.2)); }
 float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -41,7 +45,7 @@ float hatchLayer(vec2 px, vec3 n, float a, float s, float cover){
   c += (n.x * 1.6 + n.y * 1.1) * s * 2.2;
   c += (vnoise(px * 0.035) - 0.5) * s * 0.9;
   float f = abs(fract(c / s) - 0.5) * s;
-  float w = s * clamp(cover, 0.0, 0.5) * (0.75 + 0.5 * vnoise(px * 0.11 + a));
+  float w = min(s * clamp(cover, 0.0, 0.5) * 0.75, s * 0.34) * (0.75 + 0.5 * vnoise(px * 0.11 + a));
   // los trazos se cortan a tramos, como plumilla
   float brk = smoothstep(0.18, 0.3, vnoise(vec2(dot(px, dir) * 0.045, floor(c / s) * 3.7)));
   return (1.0 - smoothstep(w * 0.5, w * 0.5 + 0.9, f)) * brk;
@@ -51,7 +55,36 @@ float quant(float l){
   if (tones == 3) return l < th.x ? 0.0 : (l < th.y ? 0.5 : 1.0);
   return l < th.x ? 0.0 : l < th.y ? 0.25 : l < th.z ? 0.5 : l < th.w ? 0.75 : 1.0;
 }
+vec2 barrel(vec2 uv){ vec2 c = uv - 0.5; float a = res.x / res.y; c.x *= a; float k = fisheye * 2.4; float rm = 0.25 * (a * a + 1.0); c *= (1.0 + k * dot(c, c)) / (1.0 + k * rm); c.x /= a; return c + 0.5; }
+// Efectos de viñeta encima del render: velocidad, enfoque e impacto
+vec3 applyFx(vec3 col, float bg){
+  if (fxType == 0 || fxAmt <= 0.0) return col;
+  vec2 px = vUv * res;
+  vec2 q = (vUv - focus) * vec2(res.x / res.y, 1.0);
+  float rad = length(q);
+  if (fxType == 1) {
+    vec2 dir = vec2(cos(fxAng), sin(fxAng));
+    float across = dot(px, vec2(-dir.y, dir.x)), along = dot(px, dir);
+    float id = floor(across / 3.0), h = hash(vec2(id, 7.0));
+    float seg = fract(along / (res.y * (0.25 + h * 0.5)) + h * 5.0);
+    float on = step(1.0 - fxAmt * 0.45, h) * step(seg, 0.55) * smoothstep(0.08, 0.45, rad);
+    float w = 1.0 - smoothstep(0.35, 1.1, abs(fract(across / 3.0) - 0.5) * 3.0 / (0.6 + h));
+    return mix(col, fxInk, on * w * 0.9 * mix(0.3, 1.0, bg));
+  }
+  float ang = atan(q.y, q.x), k = ang * 57.3 * 0.9;
+  float id = floor(k), h = hash(vec2(id, 3.0));
+  float r0 = mix(0.42, 0.16, fxAmt) + h * 0.12;
+  float wedge = abs(fract(k) - 0.5) * 2.0;
+  float wid = clamp((rad - r0) * 1.6, 0.0, 0.9);
+  float on = step(0.5 - fxAmt * 0.35, h) * step(wedge, wid) * step(r0, rad);
+  if (fxType == 2) return mix(col, fxInk, on * mix(0.3, 1.0, bg));
+  // marco de impacto: se invierte en negro y blanco, con rayos blancos sobre negro
+  float l = dot(col, vec3(0.299, 0.587, 0.114));
+  vec3 inv = vec3(step(l, 0.55));
+  return mix(inv, vec3(1.0) - inv, on * 0.85);
+}
 void main(){
+  vUv = fisheye > 0.0 ? barrel(vUv0) : vUv0;
   vec3 col = toSRGB(texture2D(tColor, vUv).rgb);
   float d = texture2D(tDepth, vUv).x;
   float lum = dot(col, vec3(0.299, 0.587, 0.114));
@@ -141,7 +174,7 @@ void main(){
       col = mix(clamp(c, 0.0, 1.0), ink, line);
       v = dot(col, vec3(0.333));
     }
-    gl_FragColor = vec4(col, (clearBg && sky) ? line : 1.0);
+    gl_FragColor = vec4(applyFx(col, sky ? 1.0 : 0.0), (clearBg && sky) ? line : 1.0);
     return;
   }
   float e = 0.0;
@@ -171,7 +204,7 @@ void main(){
   }
   float a = 1.0;
   if (clearBg && (d >= 0.99999 || contourOnly)) a = contourOnly ? e : (d >= 0.99999 ? e : 1.0);
-  gl_FragColor = vec4(col, a);
+  gl_FragColor = vec4(applyFx(col, d >= 0.99999 ? 1.0 : 0.0), a);
 }`;
 
 // Modos de semirender ("arcilla" y "color" no cuantizan)
@@ -179,6 +212,8 @@ export const MODE_INDEX = { clay: 0, color: 0, values: 1, noir: 2, manga: 3, cel
 export const MODES = { clay: "Arcilla", color: "Color", values: "Valores", noir: "Noir", manga: "Manga", cel: "Cel", luz: "Notas de luz", grabado: "Grabado sepia", dinamico: "Color dinámico" };
 // Estilos de artista: parámetros que viajan con el perfil. Los dos de base salen de las referencias de Brayand
 // (sus páginas de The Elder's Apprentice y los reels de viñeta animada).
+export const FX_INDEX = { ninguno: 0, velocidad: 1, enfoque: 2, impacto: 3 };
+export const FX = { ninguno: "Ninguno", velocidad: "Líneas de velocidad", enfoque: "Líneas de enfoque", impacto: "Marco de impacto" };
 export const STYLE_KEYS = ["mode", "th", "thick", "outline", "hatch", "grain", "lineVar", "paper", "sepia", "burst", "burstA", "burstB", "dot", "tones", "background"];
 export const BASE_STYLES = [
   { name: "Grabado sepia · Brayand", base: true, view: { mode: "grabado", th: 0.5, thick: 1.1, outline: true, hatch: 5, grain: 0.6, lineVar: 0.7, paper: "#e6d3ae", sepia: "#2a1d12", background: "papel" } },
@@ -213,7 +248,7 @@ export class Composer {
         outline: { value: false }, contourOnly: { value: false }, blue: { value: false }, clearBg: { value: false }, useNormal: { value: true },
         ink: { value: new THREE.Color(0.11, 0.11, 0.12) }, blueInk: { value: new THREE.Color(0.25, 0.55, 0.85) },
         hatch: { value: 5 }, grain: { value: 0.6 }, lineVar: { value: 0.7 }, paper: { value: new THREE.Color("#e6d3ae") }, sepia: { value: new THREE.Color("#2a1d12") },
-        burst: { value: true }, burstA: { value: new THREE.Color("#ffb36b") }, burstB: { value: new THREE.Color("#d23c35") }, focus: { value: new THREE.Vector2(0.5, 0.55) },
+        burst: { value: true }, burstA: { value: new THREE.Color("#ffb36b") }, burstB: { value: new THREE.Color("#d23c35") }, focus: { value: new THREE.Vector2(0.5, 0.55) }, fxType: { value: 0 }, fxAmt: { value: 0 }, fxAng: { value: 0 }, fisheye: { value: 0 }, fxInk: { value: new THREE.Color(0.08, 0.07, 0.07) },
       },
     });
     this.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.mat);
@@ -233,7 +268,7 @@ export class Composer {
   // view: {mode:'clay'|'values', tones, th:[4], outline, thick}; opts: {blue, clearBg, force, target}
   render(scene, camera, view, opts = {}, hideForNormals = []) {
     const r = this.renderer;
-    const post = opts.force || (MODE_INDEX[view.mode] || 0) > 0 || view.outline || opts.blue;
+    const post = opts.force || (MODE_INDEX[view.mode] || 0) > 0 || view.outline || opts.blue || (view.fx && view.fx !== "ninguno") || view.fisheye > 0;
     if (!post) { r.setRenderTarget(opts.target || null); r.render(scene, camera); return; }
     const rt = opts.rt || this.rt, nrt = opts.nrt || this.nrt;
     if (view.mode === "luz") this.lightNotes(scene, camera, rt, opts);
@@ -266,6 +301,9 @@ export class Composer {
     u.grain.value = view.grain ?? 0.6; u.lineVar.value = view.lineVar ?? 0.6;
     u.paper.value.set(view.paper || "#e6d3ae"); u.sepia.value.set(view.sepia || "#2a1d12");
     u.burst.value = view.burst !== false; u.burstA.value.set(view.burstA || "#ffb36b"); u.burstB.value.set(view.burstB || "#d23c35");
+    u.fxType.value = FX_INDEX[view.fx] || 0; u.fxAmt.value = view.fxAmt ?? 0.6; u.fxAng.value = (view.fxAng || 0) * Math.PI / 180;
+    u.fisheye.value = view.fisheye || 0; u.focus.value.set(view.focusX ?? 0.5, view.focusY ?? 0.55);
+    u.fxInk.value.set(view.mode === "grabado" ? (view.sepia || "#2a1d12") : "#141212");
     if (view.mode === "dinamico") u.ink.value.setRGB(0.05, 0.04, 0.06); else u.ink.value.setRGB(0.11, 0.11, 0.12);
     r.setRenderTarget(opts.target || null);
     r.render(this.qScene, this.qCam);

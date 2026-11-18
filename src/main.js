@@ -7,7 +7,7 @@ import * as M from "./mannequin.js";
 import { POSE_LIBRARY, POSE_CATS } from "./poses.js";
 import { PRIMITIVES, PROPS, EXTRA_PROPS, TERRAIN, TERRAIN_TYPES, ALL_PROPS, buildProp } from "./props.js";
 import { LIGHT_TYPES, newLight, buildLight, buildLightIcon, presetNoir, presetDay, presetSunset, presetMoon, presetNeon, presetFire, presetBacklight, presetUnder, presetBlinds, PRESETS, GOBOS } from "./lights.js";
-import { Composer, renderToBlob, MODES, LIGHT_NOTES, STYLE_KEYS, BASE_STYLES } from "./render.js";
+import { Composer, renderToBlob, MODES, LIGHT_NOTES, STYLE_KEYS, BASE_STYLES, FX } from "./render.js";
 import { applyAtmosphere, aspectOf, sceneFor, disposeScene } from "./scenes.js";
 import { SCENARIOS } from "./scenarios.js";
 import { createPageEditor, styleView, FORMATS } from "./page.js";
@@ -19,6 +19,7 @@ import { gatherObstacles, deformSkin, resetSkin } from "./contact.js";
 import { dress, GARMENTS, MATERIALS, FOLD_TYPES, newGarment, HAIR_STYLES } from "./cloth.js";
 import { equip, ACCESSORIES, MATERIALS as ACC_MATS, FINGER_NAMES, newAccessory } from "./accessories.js";
 import * as cloud from "./cloud.js";
+import { analyzeLocal, analyzeAI, AI_DEFAULT_MODEL } from "./calibrate.js";
 
 const PAPER = 0xf1f0ec, DARK = 0x111214, BLUE = 0x7cc0ea, BLUE_DEEP = 0x3e7fb0;
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -1013,6 +1014,29 @@ $("#drill-pause").addEventListener("click", () => { if (drill) { drill.paused = 
 $("#drill-end").addEventListener("click", () => endDrill(false));
 $("#drill-keep").addEventListener("click", () => endDrill(false, true));
 
+function aiConf() { try { return JSON.parse(localStorage.getItem("arnes-ai") || "{}"); } catch { return {}; } }
+function writeAi(o) { try { localStorage.setItem("arnes-ai", JSON.stringify(o)); } catch {} }
+async function calibrate(file) {
+  ui.calBusy = true; ui.calReport = null; renderPanel();
+  const v = store.v.view;
+  try {
+    const { view, report, canvas } = await analyzeLocal(file);
+    let name = "", rep = [...report], final = view;
+    const ai = aiConf();
+    if (ai.key && cloud.reachable()) {
+      try { const r = await analyzeAI(canvas, ai, view); final = r.view; name = r.name; if (r.notes) rep.push("Gemini: " + r.notes); else rep.push("Gemini afinó los parámetros."); }
+      catch (e) { rep.push(e.message); }
+    }
+    Object.assign(v, clone(final)); applyBackground(); repaintAll(); store.commit(); markDirty(3);
+    const base = name || `Calibrado · ${file.name.replace(/\.[^.]+$/, "").slice(0, 24)}`;
+    const list = savedStyles(); let nm = base, i = 2; while (list.some(x => x.name === nm)) nm = `${base} ${i++}`;
+    const sv = {}; for (const k of STYLE_KEYS) if (final[k] !== undefined) sv[k] = clone(final[k]);
+    list.push({ name: nm, view: sv }); writeStyles(list);
+    rep.push(`Se guardó como «${nm}» en tus estilos y ya está aplicado a esta viñeta. Ajusta los controles si algo no te convence.`);
+    ui.calReport = rep;
+  } catch { ui.calReport = ["No se pudo leer esa imagen. Prueba con una foto JPG o PNG."]; }
+  ui.calBusy = false; renderPanel();
+}
 function savedStyles() { try { return JSON.parse(localStorage.getItem("arnes-styles") || "[]"); } catch { return []; } }
 function writeStyles(a) { try { localStorage.setItem("arnes-styles", JSON.stringify(a)); } catch { toast("Este navegador no permite guardar estilos aquí."); } syncProfile(); }
 function savedChars() { try { return JSON.parse(localStorage.getItem("arnes-chars") || "[]"); } catch { return []; } }
@@ -1157,8 +1181,16 @@ function panelCamara() {
   ${slider("roll", "Holandés (inclinar la cámara)", c.roll || 0, -45, 45, 1, "°", "roll")}
   <p class="sub">También puedes girar la cámara con dos dedos en el visor mientras esta pestaña está abierta.</p>
   ${tipFor(c)}`;
-  h += `<div class="field"><label for="lens">Lente <output id="lens-o">${c.mm} mm</output></label><input type="range" id="lens" data-act="lens" min="14" max="200" step="1" value="${c.mm}">
-  <div class="scale"><span>14 gran angular</span><span>50 normal</span><span>200 tele</span></div></div>`;
+  h += `<div class="field"><label for="lens">Lente <output id="lens-o">${c.mm} mm</output></label><input type="range" id="lens" data-act="lens" min="8" max="200" step="1" value="${c.mm}">
+  <div class="scale"><span>8 extremo</span><span>50 normal</span><span>200 tele</span></div></div>`;
+  h += `<h3>Composición dinámica</h3>
+  ${slider("fisheye", "Ojo de pez (curva la imagen)", v.fisheye || 0, 0, 1, 0.05, "", "view-r")}
+  <p class="sub">Para un escorzo extremo (el puño que se agranda hacia el lector), baja el lente a 8–14 mm y acerca la cámara a la mano.</p>
+  <h3>Efecto de viñeta</h3><div class="pills">${Object.entries(FX).map(([k, l]) => pill(k, v.fx || "ninguno", l, "fx")).join("")}</div>`;
+  if (v.fx && v.fx !== "ninguno") h += slider("fxAmt", "Intensidad", v.fxAmt ?? 0.6, 0.1, 1, 0.05, "", "view-r")
+    + (v.fx === "velocidad" ? slider("fxAng", "Dirección del movimiento", v.fxAng || 0, -180, 180, 5, "°", "view-r") : "")
+    + slider("focusX", "Centro (izquierda ↔ derecha)", v.focusX ?? 0.5, 0, 1, 0.01, "", "view-r") + slider("focusY", "Centro (abajo ↔ arriba)", v.focusY ?? 0.55, 0, 1, 0.01, "", "view-r")
+    + `<p class="sub">${{ velocidad: "Las líneas despejan el centro y se cargan hacia los bordes: el centro va sobre lo que se mueve.", enfoque: "Rayos que apuntan al centro: llevan la mirada al gesto o al objeto clave.", impacto: "Invierte la viñeta en negro y blanco con rayos: para el instante del golpe." }[v.fx]}</p>`;
   h += `<h3>Proporción de la viñeta</h3><div class="pills">${Object.keys(ASPECTS).map(k => pill(k, c.aspect, k === "libre" ? "Libre" : k, "aspect")).join("")}${typeof c.aspect === "number" ? pill("page", "page", `De su recuadro (${round(c.aspect, 2)}:1)`, "noop") : ""}</div>`;
   h += `<h3>Vistas libres</h3><div class="pills">${[["front", "Frente"], ["side", "Lado"], ["top", "Arriba"], ["persp", "Tres cuartos"]].map(([k, l]) => pill(k, "", l, "view-free")).join("")}</div>`;
   h += `<div class="toggles">${toggle("horizon", "Línea de horizonte", "Siempre a la altura del ojo de la cámara", v.horizon)}${toggle("vp", "Puntos de fuga", "De la grilla del piso y de las verticales", v.vp)}</div>`;
@@ -1190,6 +1222,16 @@ function panelLuz() {
   ${mine.length ? `<div class="pills"><span class="pl">Borrar</span>${mine.map((st, i) => `<button class="pill" data-act="style-del" data-val="${i}">${esc(st.name)} ×</button>`).join("")}</div>` : ""}
   <div class="row"><input class="text" id="stylename" placeholder="Nombre del estilo" aria-label="Nombre del estilo"><button class="btn" data-act="style-save">Guardar este estilo</button></div>
   <p class="sub">Tus estilos viajan con tu cuenta. Puedes tener varios y aplicarlos a cualquier viñeta.</p>`;
+  const ai = aiConf();
+  h += `<h3>Calibrar desde una página tuya</h3><p class="sub">Sube una foto o escaneo de una página entintada. Arnés lee el papel, la tinta, la mancha de negro y el rayado, y crea un estilo nuevo con eso.</p>
+  <label class="btn wide filebtn">${ui.calBusy ? "Leyendo la página…" : "Elegir página"}<input type="file" id="calfile" accept="image/*" hidden ${ui.calBusy ? "disabled" : ""}></label>
+  ${ui.calReport ? `<div class="card calrep">${ui.calReport.map(l => `<p class="sub">${esc(l)}</p>`).join("")}</div>` : ""}
+  <details class="more"${ai.key ? "" : ""}><summary>IA para calibrar (opcional, con tu clave)</summary>
+    <p class="sub">Con una clave de Gemini la lectura es más fina y te describe tu trazo. La clave se guarda solo en este dispositivo y cada uso lo paga tu cuenta de Google.${cloud.reachable() ? "" : " La IA funciona en la versión de GitHub Pages."}</p>
+    <label class="fld"><span>Clave de Gemini</span><input class="text" type="password" data-act="ai-key" value="${esc(ai.key || "")}" placeholder="Pégala desde Google AI Studio" autocomplete="off"></label>
+    <label class="fld"><span>Modelo</span><input class="text" data-act="ai-model" value="${esc(ai.model || AI_DEFAULT_MODEL)}"></label>
+    ${ai.key ? `<button class="btn" data-act="ai-forget">Quitar la clave de este dispositivo</button>` : ""}
+  </details>`;
   if (v.mode === "luz") h += `<ul class="legend">${LIGHT_NOTES.map(([l, c]) => `<li><i style="background:${c}"></i>${l}</li>`).join("")}</ul>
     <p class="sub">El terminador es la frontera entre luz y sombra propia: ahí la forma gira y el tono cambia más rápido. La luz reflejada es la que rebota del piso en la sombra.</p>`;
   if (v.mode === "values") h += `<div class="pills"><span class="pl">Tonos</span>${[2, 3, 5].map(n => pill(String(n), String(v.tones), String(n), "tones")).join("")}</div>`;
@@ -1376,6 +1418,8 @@ panel.addEventListener("click", e => {
       const list = savedStyles().filter(x => x.name !== name); list.push({ name, view }); writeStyles(list); renderPanel(); toast(`Se guardó «${name}» en tus estilos.`); break;
     }
     case "style-del": { const list = savedStyles(); const [st] = list.splice(+val, 1); writeStyles(list); renderPanel(); if (st) toast(`Se borró «${st.name}».`); break; }
+    case "ai-forget": writeAi({ model: aiConf().model }); renderPanel(); toast("Se quitó la clave de este dispositivo."); break;
+    case "fx": v.view.fx = val; store.commit(); renderPanel(); markDirty(); break;
     case "tones": v.view.tones = +val; store.commit(); renderPanel(); markDirty(); break;
     case "bg": v.view.background = val; applyBackground(); store.commit(); renderPanel(); markDirty(); break;
   }
@@ -1417,6 +1461,8 @@ panel.addEventListener("input", e => {
 panel.addEventListener("change", e => {
   const el = e.target, act = el.dataset.act, key = el.dataset.key;
   if (el.id === "glbfile") { importGlb(el.files[0]); el.value = ""; return; }
+  if (el.id === "calfile") { const f = el.files[0]; el.value = ""; if (f) calibrate(f); return; }
+  if (el.dataset.act === "ai-key" || el.dataset.act === "ai-model") { const a = aiConf(); a[el.dataset.act === "ai-key" ? "key" : "model"] = el.value.trim(); writeAi(a); renderPanel(); toast(el.dataset.act === "ai-key" ? "Clave guardada solo en este dispositivo." : "Modelo guardado."); return; }
   if (!act) return;
   const o = selObj(), v = store.v;
   if (pageEd.onChangeEl(act, el)) return;

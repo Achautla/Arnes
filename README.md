@@ -2,6 +2,12 @@
 
 Storyboard 3D para cómic: posar personajes, colocar cámaras y luces, y obtener un semirender (volumen, sombras y valores) para dibujar a lápiz.
 
+## Fase 4 · bloque 2 y calibración (18-nov)
+
+- **Efectos de viñeta** (pestaña Cámara): líneas de velocidad con dirección, líneas de enfoque, marco de impacto en negro y blanco, con centro e intensidad ajustables.
+- **Ojo de pez** y lente hasta 8 mm para escorzos extremos.
+- **Calibrar desde una página tuya** (pestaña Luz): lectura local del papel, la tinta, la mancha de negro y el rayado; con clave de Gemini (opcional, guardada solo en el dispositivo) la lectura se afina y describe el trazo. El resultado queda guardado como estilo propio.
+
 ## Fase 4 · primera entrega: estilos de artista (18-nov)
 
 - **Grabado sepia · Brayand:** sale de las páginas de *The Elder's Apprentice*. Papel envejecido con grano y viñeteado, plumilla con rayado cruzado que se curva con la forma, negros sólidos y línea que engorda en la sombra.

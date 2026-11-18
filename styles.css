@@ -264,3 +264,7 @@ body.drilling #tbar, body.drilling .hud { display: none !important; }
 #home .oauth .sub { text-align: center; margin: 0; }
 .btn.fb { display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: #1877f2; border-color: #1877f2; color: #fff; font-weight: 600; min-height: 44px; }
 .btn.fb:hover { background: #166fe0; }
+/* Calibrar estilo */
+.filebtn { display: flex; justify-content: center; align-items: center; cursor: pointer; }
+.calrep { margin-top: 8px; }
+.calrep .sub { margin: 4px 0; }
