@@ -134,7 +134,7 @@ export class Store {
     this.saveTimer = setTimeout(() => this.saveNow(), 700);
   }
   async saveNow() {
-    if (!this.project) return;
+    if (!this.project || this.readOnly) return;
     const ok = await this.writeProject(this.project);
     this.emit(ok ? "saved" : "save-failed");
   }

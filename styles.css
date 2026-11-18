@@ -245,3 +245,12 @@ body.home-open > header, body.home-open > nav, body.home-open > aside { visibili
 .sub-card { margin-top: 8px; background: var(--graphite); }
 .hud .tagbtn { pointer-events: auto; border: 1px solid var(--blue-deep); color: var(--blue); cursor: pointer; min-height: 28px; }
 .hud .tagbtn:hover { background: var(--graphite-3); }
+.legend { list-style: none; padding: 0; margin: 8px 0; display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 13.5px; }
+.legend i { display: inline-block; width: 14px; height: 14px; border-radius: 3px; margin-right: 6px; vertical-align: -2px; border: 1px solid rgba(0,0,0,.35); }
+#lnotes { position: absolute; top: 10px; left: 10px; z-index: 3; margin: 0; padding: 6px 9px; background: rgba(27,27,27,.82); border-radius: 8px; color: var(--ink); pointer-events: none; }
+#viewbar { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 8; display: flex; gap: 8px; align-items: center; padding: 6px 8px 6px 12px; background: var(--graphite-2); border: 1px solid var(--blue-deep); border-radius: 10px; max-width: calc(100% - 16px); }
+#viewbar span { font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+body.viewer nav#tabs button[data-tab="escena"], body.viewer nav#tabs button[data-tab="pose"], body.viewer nav#tabs button[data-tab="luz"], body.viewer #pchip { display: none; }
+body.viewer nav#tabs { grid-template-columns: repeat(2, 1fr); }
+#xshare-url { flex: 1; min-width: 0; }
+body.viewer .pv-wrap { padding-top: 66px; }

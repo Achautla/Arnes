@@ -50,6 +50,8 @@
   </div>
   <button id="exit-through" class="exit">Salir de la vista de cámara</button>
   <div id="toast" role="status" hidden></div>
+  <ul id="lnotes" class="legend" hidden></ul>
+  <div id="viewbar" hidden><span id="viewbar-t"></span><button class="btn accent" id="view-copy">Guardar una copia</button><button class="btn" id="view-exit">Salir</button></div>
   <div id="pageview" hidden></div>
   <div id="loading">Cargando el motor 3D…</div>
 </main>
@@ -80,6 +82,12 @@
 <dialog id="export" aria-labelledby="xt">
   <div class="dlg">
     <div class="dlg-h"><h2 id="xt">Exportar</h2><button class="ibtn" data-x="close" aria-label="Cerrar">✕</button></div>
+    <section id="xshare-sec">
+      <h3>Compartir para ver</h3>
+      <p class="sub">Un enlace de solo lectura: quien lo abra ve tus viñetas y tu página, puede girar la cámara y guardar una copia, pero no cambia tu proyecto. El proyecto va dentro del enlace; no se sube a ningún lado.</p>
+      <div class="row"><button class="btn accent" data-x="share">Crear enlace</button></div>
+      <div class="row" id="xshare-out" hidden><input class="text" id="xshare-url" readonly aria-label="Enlace de solo lectura"><button class="btn" data-x="share-copy">Copiar</button></div>
+    </section>
     <section id="xpage-sec">
       <h3>Página completa</h3>
       <p class="sub">Toda la página con sus viñetas, globos y bordes, en el estilo que elijas.</p>

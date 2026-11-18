@@ -7,13 +7,14 @@ import * as M from "./mannequin.js";
 import { POSE_LIBRARY } from "./poses.js";
 import { PRIMITIVES, PROPS, EXTRA_PROPS, TERRAIN, TERRAIN_TYPES, ALL_PROPS, buildProp } from "./props.js";
 import { LIGHT_TYPES, newLight, buildLight, buildLightIcon, presetNoir, presetDay, presetSunset, presetMoon, presetNeon, presetFire, presetBacklight, presetUnder, presetBlinds, PRESETS, GOBOS } from "./lights.js";
-import { Composer, renderToBlob, MODES } from "./render.js";
+import { Composer, renderToBlob, MODES, LIGHT_NOTES } from "./render.js";
 import { applyAtmosphere, aspectOf, sceneFor, disposeScene } from "./scenes.js";
 import { SCENARIOS } from "./scenarios.js";
 import { createPageEditor, styleView, FORMATS } from "./page.js";
 import { Store, ASPECTS, newVineta, defaultView, defaultCamera } from "./store.js";
 import { buildExample } from "./example.js";
 import { createHome } from "./home.js";
+import * as share from "./share.js";
 import { dress, GARMENTS, MATERIALS, FOLD_TYPES, newGarment } from "./cloth.js";
 import * as cloud from "./cloud.js";
 
@@ -639,6 +640,8 @@ new ResizeObserver(resize).observe(viewport);
 
 let lastFrame = 0;
 let lastGazeKey = "";
+const lnotes = $("#lnotes");
+lnotes.innerHTML = LIGHT_NOTES.map(([l, c]) => `<li><i style="background:${c}"></i>${l}</li>`).join("");
 renderer.setAnimationLoop(now => {
   if (!store.project || ui.tab === "pagina") return;
   stepTween(now);
@@ -653,6 +656,7 @@ renderer.setAnimationLoop(now => {
   const gazeCam = camKey !== lastGazeKey && store.v.objects.some(o => o.gaze === "camera");
   lastGazeKey = camKey;
   if (!ui.dirty && !gazeCam) return;
+  lnotes.hidden = store.v.view.mode !== "luz";
   if (ui.dirty) ui.dirty--;
   updateHelpers();
   renderer.autoClear = true;
@@ -1061,10 +1065,12 @@ function panelLuz() {
     <div class="row"><button class="btn" data-act="fwd">Copiar a viñetas siguientes</button><button class="btn danger" data-act="del">Borrar luz</button></div></div>`;
   }
   h += `<h2>Semirender</h2><div class="pills">${Object.entries(MODES).map(([k, l]) => pill(k, v.mode, l, "mode")).join("")}</div>`;
-  const tips = { clay: "Volumen gris, sin color.", color: "Usa el color que le diste a cada objeto.", values: "Agrupa la luz en 2, 3 o 5 tonos.", noir: "Solo negro y blanco: decide dónde van las masas de negro.", manga: "Medios tonos como tramas de puntos.", cel: "Color plano en tres tonos." };
+  const tips = { clay: "Volumen gris, sin color.", color: "Usa el color que le diste a cada objeto.", values: "Agrupa la luz en 2, 3 o 5 tonos.", noir: "Solo negro y blanco: decide dónde van las masas de negro.", manga: "Medios tonos como tramas de puntos.", cel: "Color plano en tres tonos.", luz: "Cómo cae la luz principal sobre cada forma: así se decide dónde va cada tono al dibujar." };
   h += `<p class="sub">${tips[v.mode] || ""}</p>`;
+  if (v.mode === "luz") h += `<ul class="legend">${LIGHT_NOTES.map(([l, c]) => `<li><i style="background:${c}"></i>${l}</li>`).join("")}</ul>
+    <p class="sub">El terminador es la frontera entre luz y sombra propia: ahí la forma gira y el tono cambia más rápido. La luz reflejada es la que rebota del piso en la sombra.</p>`;
   if (v.mode === "values") h += `<div class="pills"><span class="pl">Tonos</span>${[2, 3, 5].map(n => pill(String(n), String(v.tones), String(n), "tones")).join("")}</div>`;
-  if (v.mode !== "clay" && v.mode !== "color") h += slider("th", "Umbral (más luz ↔ más sombra)", v.th, 0, 1, 0.05, "", "view-r");
+  if (!["clay", "color", "luz"].includes(v.mode)) h += slider("th", "Umbral (más luz ↔ más sombra)", v.th, 0, 1, 0.05, "", "view-r");
   if (v.mode === "manga") h += slider("dot", "Tamaño de la trama", v.dot || 7, 3, 16, 1, " px", "view-r");
   h += `<div class="toggles">${toggle("outline", "Contorno", "Silueta y bordes marcados", v.outline)}</div>`;
   if (v.outline) h += slider("thick", "Grosor del contorno", v.thick, 0.5, 4, 0.25, " px", "view-r");
@@ -1398,7 +1404,18 @@ dlg.addEventListener("click", async e => {
   if (x === "close") { dlg.close(); return; }
   b.disabled = true; st.textContent = "Preparando…";
   try {
-    if (x === "page-png" || x === "page-pdf") {
+    if (x === "share") {
+      storeCamera(); store.saveNow();
+      st.textContent = "Comprimiendo el proyecto…";
+      const { url, models } = await share.makeLink(store.project);
+      $("#xshare-out").hidden = false; $("#xshare-url").value = url; $("#xshare-url").select();
+      const kb = Math.round(url.length / 1024);
+      st.textContent = `Enlace listo (${kb} KB).` + (models ? ` Se quitaron ${models} modelo(s) .glb importado(s): pesan demasiado para un enlace.` : "") + (url.length > 60000 ? " Es largo: compártelo por correo o WhatsApp; algunos chats lo cortan." : "") + (share.shareBase() === share.PAGES_URL && !/github\.io$/.test(location.hostname) ? " Abre en la versión de GitHub Pages." : "");
+    } else if (x === "share-copy") {
+      const inp = $("#xshare-url"); inp.select();
+      try { await navigator.clipboard.writeText(inp.value); st.textContent = "Enlace copiado."; }
+      catch { document.execCommand?.("copy"); st.textContent = "Si no se copió, mantén presionado el enlace y elige Copiar."; }
+    } else if (x === "page-png" || x === "page-pdf") {
       storeCamera();
       const pst = $("#xpstyle").value, dpi = +$("#xpdpi").value;
       st.textContent = "Dibujando la página…";
@@ -1568,10 +1585,29 @@ window.claude?.hot?.snapshot?.(() => ({ project: store.project, tab: ui.tab }));
 
 async function start(hot = {}) {
   if (hot.project) { openProject(hot.project, hot.tab); return; }
+  if (location.hash.startsWith("#ver=")) {
+    try { const p = await share.decode(location.hash.slice(5)); openViewer(p); return; }
+    catch { toast("Ese enlace está incompleto o dañado. Pide que te lo vuelvan a enviar."); }
+  }
   await store.list(); // migra el guardado de versiones anteriores
   home.show();
   document.body.classList.add("ready");
 }
+// Vista de solo lectura (enlace compartido): nada se guarda hasta que el visitante guarda una copia
+function openViewer(p) {
+  store.readOnly = true; document.body.classList.add("viewer");
+  openProject(p, p.pages?.length ? "pagina" : "camara");
+  $("#viewbar").hidden = false; $("#viewbar-t").textContent = `Solo lectura · ${p.name || "Proyecto compartido"}`;
+}
+function leaveViewer() {
+  store.readOnly = false; document.body.classList.remove("viewer"); $("#viewbar").hidden = true;
+  history.replaceState(null, "", location.pathname + location.search);
+}
+$("#view-copy").addEventListener("click", async () => {
+  const p = store.project; p.id = uid("p"); p.name = (p.name || "Proyecto") + " (copia)";
+  leaveViewer(); await store.saveNow(); toast("Copia guardada en tus proyectos. Ya puedes editarla.");
+});
+$("#view-exit").addEventListener("click", () => { leaveViewer(); store.project = null; home.show(); });
 function openProject(project, tab = "escena") {
   if (!project?.vinetas?.length) project = buildExample();
   store.load(migrate(project));

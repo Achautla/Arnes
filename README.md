@@ -2,6 +2,12 @@
 
 Storyboard 3D para cómic: posar personajes, colocar cámaras y luces, y obtener un semirender (volumen, sombras y valores) para dibujar a lápiz.
 
+## Cierre de Fase 2 (18-nov)
+
+- **Notas de luz** (Luz → Semirender): zona iluminada, terminador, sombra propia, sombra proyectada, luz reflejada y sin luz directa, calculadas con la luz principal.
+- **Enlace de solo lectura** (Exportar → Compartir para ver): el proyecto va comprimido dentro del enlace (`#ver=`), sin servidor. Quien lo abre puede ver, girar la cámara y guardar una copia.
+- Pendiente: la nube, en cuanto haya una organización propia de Supabase conectada.
+
 ## Fase 3 · bloque 1 (ropa y pliegues) — publicado
 
 - **Ropa** (Escena → personaje → Ropa): camisa, pantalón, saco, gabardina, vestido, falda y capa; vestuarios rápidos (detective noir, traje, casual, vestido, capa).
@@ -57,6 +63,7 @@ Para probarla en tu computadora sin publicar: `python -m http.server` en esta ca
 - `src/mannequin.js`: maniquí segmentado, límites, IK, manos, mirada, centro de masa.
 - `src/poses.js`, `src/props.js`, `src/props2.js`, `src/lights.js`: biblioteca de poses, utilería, terreno, luces, presets y gobos.
 - `src/scenarios.js`: escenarios armados. `src/scenes.js`: escenas fuera del visor (miniaturas de página y exportación).
+- `src/share.js`: enlace de solo lectura comprimido.
 - `src/cloth.js`: ropa, simulación de tela, pliegues y clasificación de pliegues.
 - `src/page.js`: editor de página. `src/home.js`: inicio y mis proyectos. `src/cloud.js`, `src/cloud-config.js`: nube (Supabase por REST).
 - `src/render.js`: semirender (valores, contorno, líneas azules) y exportación a imagen.
