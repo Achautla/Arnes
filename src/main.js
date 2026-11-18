@@ -1779,7 +1779,7 @@ async function start(hot = {}) {
   }
   let note = "";
   if (cloud.configured()) {
-    try { if (await cloud.consumeOAuth()) { mergeProfile(); toast("Entraste con Facebook."); } }
+    try { if (await cloud.consumeOAuth()) { mergeProfile(); toast("Entraste a tu cuenta."); } }
     catch (e) { note = e.message; }
   }
   await store.list(); // migra el guardado de versiones anteriores
