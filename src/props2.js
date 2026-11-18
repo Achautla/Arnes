@@ -24,7 +24,37 @@ export const EXTRA_PROPS = {
   andamio: { label: "Andamio", params: { ancho: 300, pisos: 2 } },
   columna: { label: "Columna", params: { alto: 300 } },
   losa: { label: "Losa o plataforma", params: { ancho: 400, fondo: 300, alto: 20 } },
+  humo: { label: "Humo o vapor", params: { alto: 80, ancho: 40, densidad: 60, semilla: 3, tono: "claro" } },
 };
+
+// Humo: una lámina que siempre mira a la cámara, con volutas de ruido. No genera contorno ni sombra,
+// así que cada estilo lo lee como valor: en el grabado se vuelve volutas claras entre el rayado.
+const smokeVert = `varying vec2 vUv; void main(){ vUv = uv; vec4 mv = modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+  vec2 sc = vec2(length(modelMatrix[0].xyz), length(modelMatrix[1].xyz)); mv.xy += position.xy * sc; gl_Position = projectionMatrix * mv; }`;
+const smokeFrag = `precision highp float; varying vec2 vUv; uniform float dens, seed, dark;
+float h(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7)) + seed * 17.0) * 43758.5453); }
+float n(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f); return mix(mix(h(i), h(i + vec2(1, 0)), f.x), mix(h(i + vec2(0, 1)), h(i + vec2(1, 1)), f.x), f.y); }
+float fbm(vec2 p){ float a = 0.5, s = 0.0; for (int i = 0; i < 5; i++) { s += a * n(p); p = p * 2.03 + 11.7; a *= 0.5; } return s; }
+void main(){
+  vec2 p = vUv; float y = p.y;
+  // la columna se ensancha y serpentea al subir
+  float sway = (fbm(vec2(y * 2.5, seed)) - 0.5) * 0.6 * y;
+  float x = (p.x - 0.5 - sway) / (0.16 + 0.34 * y);
+  float body = exp(-x * x * 2.2);
+  float curl = fbm(vec2(x * 1.5 + y * 3.0, y * 4.0 - seed));
+  float wisps = smoothstep(0.32, 0.7, curl) * 0.9 + smoothstep(0.25, 0.8, fbm(p * vec2(3.0, 6.0) + curl)) * 0.5;
+  float a = body * wisps * smoothstep(0.0, 0.12, y) * smoothstep(1.0, 0.7, y) * dens * 1.5;
+  gl_FragColor = vec4(mix(vec3(1.0, 0.98, 0.95), vec3(0.08, 0.07, 0.07), dark), clamp(a, 0.0, 0.95));
+}`;
+export function buildSmoke(p, g) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).translate(0, 0.5, 0), new THREE.ShaderMaterial({
+    vertexShader: smokeVert, fragmentShader: smokeFrag, transparent: true, depthWrite: false,
+    uniforms: { dens: { value: (p.densidad ?? 60) / 60 }, seed: { value: p.semilla ?? 3 }, dark: { value: p.tono === "oscuro" ? 1 : 0 } },
+  }));
+  m.scale.set((p.ancho ?? 40) / 100, (p.alto ?? 80) / 100, 1);
+  m.userData.noLines = true; m.userData.noContact = true; m.castShadow = false; m.receiveShadow = false; m.renderOrder = 5; m.frustumCulled = false;
+  g.add(m);
+}
 export const TERRAIN_TYPES = { campo: "Campo", bosque: "Bosque", abismo: "Precipicio o abismo", cueva: "Cueva", rio: "Orilla de río" };
 export const TERRAIN = { terreno: { label: "Terreno irregular", params: { tipo: "campo", ancho: 3000, relieve: 120, semilla: 7 } } };
 
@@ -51,6 +81,7 @@ function noise2(seed) {
 
 export function buildExtra(type, p, g) {
   switch (type) {
+    case "humo": buildSmoke(p, g); return true;
     case "auto": {
       box(g, 1.8, 0.7, 4.3, 0, 0.6, 0); box(g, 1.6, 0.55, 2.2, 0, 1.2, -0.2);
       for (const sx of [-0.85, 0.85]) for (const sz of [-1.35, 1.35]) { const w = cyl(g, 0.34, 0.34, 0.24, sx, 0.34, sz, 24); w.rotation.z = Math.PI / 2; }

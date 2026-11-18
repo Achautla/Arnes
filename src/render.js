@@ -13,8 +13,8 @@ uniform float near, far, thick;
 uniform int mode, tones;
 uniform vec4 th;
 uniform bool outline, blue, clearBg, useNormal, contourOnly;
-uniform float dotSize, hatch, grain, lineVar;
-uniform vec3 ink, blueInk, paper, sepia, burstA, burstB;
+uniform float dotSize, hatch, grain, lineVar, detail;
+uniform vec3 ink, blueInk, paper, sepia, burstA, burstB, shadeTint, lightTint;
 uniform bool burst;
 uniform vec2 focus;
 uniform int fxType;
@@ -71,6 +71,18 @@ vec3 applyFx(vec3 col, float bg){
     float w = 1.0 - smoothstep(0.35, 1.1, abs(fract(across / 3.0) - 0.5) * 3.0 / (0.6 + h));
     return mix(col, fxInk, on * w * 0.9 * mix(0.3, 1.0, bg));
   }
+  if (fxType == 4) {
+    // lluvia: trazos cortos inclinados, más densos y largos con la intensidad
+    vec2 dir = normalize(vec2(sin(fxAng) * 0.35 + 0.18, -1.0));
+    vec2 rp = vec2(dot(px, vec2(-dir.y, dir.x)), dot(px, dir));
+    float colId = floor(rp.x / 5.0), hh = hash(vec2(colId, 9.0));
+    float len = 14.0 + 26.0 * fxAmt;
+    float seg = fract((rp.y + hh * 997.0) / (len * (3.5 - 2.0 * fxAmt)));
+    float on = step(seg, 0.28) * step(0.55 - fxAmt * 0.4, hh);
+    float w = 1.0 - smoothstep(0.3, 0.9, abs(fract(rp.x / 5.0) - 0.5) * 5.0);
+    vec3 rc = dot(col, vec3(0.333)) < 0.45 ? vec3(0.82, 0.84, 0.86) : fxInk;
+    return mix(col, rc, on * w * 0.75);
+  }
   float ang = atan(q.y, q.x), k = ang * 57.3 * 0.9;
   float id = floor(k), h = hash(vec2(id, 3.0));
   float r0 = mix(0.42, 0.16, fxAmt) + h * 0.12;
@@ -115,7 +127,7 @@ void main(){
     else col = cLit;
     v = dot(col, vec3(0.333));
   }
-  else if (mode == 6 || mode == 7) {
+  else if (mode == 6 || mode == 7 || mode == 8) {
     // estilos de artista: se resuelven completos abajo
   }
   else if (mode == 4) {
@@ -123,7 +135,7 @@ void main(){
     vec3 chroma = col / max(lum, 0.04);
     col = clamp(chroma * q, 0.0, 1.0); v = q;
   }
-  if (mode == 6 || mode == 7) {
+  if (mode == 6 || mode == 7 || mode == 8) {
     vec2 px = vUv * res;
     vec3 n = texture2D(tNormal, vUv).xyz * 2.0 - 1.0;
     bool sky = d >= 0.99999;
@@ -135,16 +147,28 @@ void main(){
     float eIn = edgeAt(r, dc, sil);
     float eOut = 0.0; edgeAt(r * (1.0 + lineVar * 1.3), dc, eOut);
     float line = max(eIn * (outline ? 1.0 : 0.0), eOut);
+    // detalle de superficie: juntas, vetas, hojas y grietas de la textura se entintan como línea fina
+    if (detail > 0.0 && !sky) {
+      vec2 o1 = 1.0 / res;
+      float lx = dot(texture2D(tColor, vUv + vec2(o1.x, 0.0)).rgb - texture2D(tColor, vUv - vec2(o1.x, 0.0)).rgb, vec3(0.333));
+      float ly = dot(texture2D(tColor, vUv + vec2(0.0, o1.y)).rgb - texture2D(tColor, vUv - vec2(0.0, o1.y)).rgb, vec3(0.333));
+      float gmag = length(vec2(lx, ly)) / max(lum, 0.08);
+      line = max(line, smoothstep(0.1, 0.35, gmag) * detail * (0.7 + 0.3 * vnoise(px * 0.3)));
+    }
     if (mode == 6) {
       // Grabado sepia: papel envejecido, plumilla con rayado cruzado y negros sólidos
       float g = vnoise(px * 0.9) * 0.5 + vnoise(px * 0.08) * 0.5;
       float vig = smoothstep(1.25, 0.35, length((vUv - 0.5) * vec2(1.0, 1.15)) * 1.6);
-      vec3 pap = paper * (1.0 - grain * 0.16 * g) * mix(0.72, 1.0, vig);
+      vec3 pp = paper; float pl = dot(pp, vec3(0.299, 0.587, 0.114)); if (pl < 0.6) pp = mix(pp, vec3(1.0), (0.6 - pl) / max(1.0 - pl, 0.01) + 0.1);
+      vec3 pap = pp * (1.0 - grain * 0.16 * g) * mix(0.72, 1.0, vig);
       float s = hatch;
       float cov = 0.0;
       cov = max(cov, hatchLayer(px, n, 0.785, s, (0.74 - L) * 1.1));
       cov = max(cov, hatchLayer(px, n, -0.62, s * 0.92, (0.5 - L) * 1.3));
       cov = max(cov, hatchLayer(px, n, 0.12, s * 0.8, (0.3 - L) * 1.6));
+      // punteado fino en los medios tonos claros: da la textura de grabado en rostros y telas
+      float stip = sky ? 0.0 : step(hash(floor(px / 1.6)), clamp((0.86 - L) * 0.35, 0.0, 0.12)) * step(0.55, L);
+      cov = max(cov, stip * 0.8);
       float solid = smoothstep(0.12, 0.06, L);
       cov = max(cov, solid);
       if (sky) cov *= 0.85;
@@ -152,6 +176,24 @@ void main(){
       inkV *= 0.82 + 0.18 * vnoise(px * 0.6);
       col = mix(pap, sepia, clamp(inkV, 0.0, 1.0));
       v = 1.0 - inkV;
+    } else if (mode == 8) {
+      // Pintura: conserva el color y la luz, agrupa los valores en manchas, tiñe sombras y luces
+      // con la paleta del artista y deja una textura de pincel que sigue la forma
+      float steps = 3.0 + (1.0 - th.x) * 4.0;
+      float Lq = floor(L * steps + 0.5) / steps;
+      vec3 c = col * mix(1.0, (Lq + 0.03) / max(L, 0.03), 0.6);
+      float t = smoothstep(0.0, 0.85, L);
+      vec3 grade = mix(shadeTint * 1.5, lightTint * 1.12, t);
+      c = mix(c, c * grade, 0.75);
+      float ang = atan(n.y, n.x);
+      vec2 bp = vec2(dot(px, vec2(cos(ang), sin(ang))), dot(px, vec2(-sin(ang), cos(ang))));
+      float br = vnoise(bp * vec2(0.05, 0.45)) * 0.6 + vnoise(px * 0.25) * 0.4;
+      c *= 1.0 + (br - 0.5) * 0.35 * grain;
+      float rim = smoothstep(0.42, 0.12, abs(n.z)) * (sky ? 0.0 : 1.0);
+      c += lightTint * rim * 0.28;
+      if (sky) c = mix(col, col * grade, 0.75) * (1.0 + (vnoise(px * 0.02) - 0.5) * 0.25 * grain);
+      col = mix(clamp(c, 0.0, 1.0), ink, line * 0.85);
+      v = dot(col, vec3(0.333));
     } else {
       // Color dinámico: color plano saturado, negros de sombra, luz de contorno y fondo de estallido
       vec3 base = mix(vec3(lum), col, 1.35);
@@ -208,15 +250,16 @@ void main(){
 }`;
 
 // Modos de semirender ("arcilla" y "color" no cuantizan)
-export const MODE_INDEX = { clay: 0, color: 0, values: 1, noir: 2, manga: 3, cel: 4, luz: 5, grabado: 6, dinamico: 7 };
-export const MODES = { clay: "Arcilla", color: "Color", values: "Valores", noir: "Noir", manga: "Manga", cel: "Cel", luz: "Notas de luz", grabado: "Grabado sepia", dinamico: "Color dinámico" };
+export const MODE_INDEX = { clay: 0, color: 0, values: 1, noir: 2, manga: 3, cel: 4, luz: 5, grabado: 6, dinamico: 7, pintura: 8 };
+export const MODES = { clay: "Arcilla", color: "Color", values: "Valores", noir: "Noir", manga: "Manga", cel: "Cel", luz: "Notas de luz", grabado: "Grabado sepia", dinamico: "Color dinámico", pintura: "Pintura" };
 // Estilos de artista: parámetros que viajan con el perfil. Los dos de base salen de las referencias de Brayand
 // (sus páginas de The Elder's Apprentice y los reels de viñeta animada).
-export const FX_INDEX = { ninguno: 0, velocidad: 1, enfoque: 2, impacto: 3 };
-export const FX = { ninguno: "Ninguno", velocidad: "Líneas de velocidad", enfoque: "Líneas de enfoque", impacto: "Marco de impacto" };
-export const STYLE_KEYS = ["mode", "th", "thick", "outline", "hatch", "grain", "lineVar", "paper", "sepia", "burst", "burstA", "burstB", "dot", "tones", "background"];
+export const FX_INDEX = { ninguno: 0, velocidad: 1, enfoque: 2, impacto: 3, lluvia: 4 };
+export const FX = { ninguno: "Ninguno", velocidad: "Líneas de velocidad", enfoque: "Líneas de enfoque", impacto: "Marco de impacto", lluvia: "Lluvia" };
+export const STYLE_KEYS = ["mode", "th", "thick", "outline", "detail", "hatch", "grain", "lineVar", "paper", "sepia", "burst", "burstA", "burstB", "shadeTint", "lightTint", "dot", "tones", "background"];
 export const BASE_STYLES = [
   { name: "Grabado sepia · Brayand", base: true, view: { mode: "grabado", th: 0.5, thick: 1.1, outline: true, hatch: 5, grain: 0.6, lineVar: 0.7, paper: "#e6d3ae", sepia: "#2a1d12", background: "papel" } },
+  { name: "Pintura nocturna", base: true, view: { mode: "pintura", th: 0.5, thick: 1, outline: true, lineVar: 0.5, detail: 0.5, grain: 0.6, shadeTint: "#1f3550", lightTint: "#d8ecff" } },
   { name: "Color dinámico", base: true, view: { mode: "dinamico", th: 0.45, thick: 1.75, outline: true, lineVar: 0.6, burst: true, burstA: "#ffb36b", burstB: "#d23c35" } },
 ];
 export const LIGHT_NOTES = [["Zona iluminada", "#f5e3b5"], ["Terminador", "#db8c3a"], ["Sombra propia", "#5e80a8"], ["Sombra proyectada", "#4a3d6b"], ["Luz reflejada", "#5fa8a0"], ["Sin luz directa", "#8c8c91"]];
@@ -247,8 +290,8 @@ export class Composer {
         thick: { value: 1.5 }, mode: { value: 0 }, dotSize: { value: 7 }, tones: { value: 3 }, th: { value: new THREE.Vector4(0.2, 0.45, 0.65, 0.85) },
         outline: { value: false }, contourOnly: { value: false }, blue: { value: false }, clearBg: { value: false }, useNormal: { value: true },
         ink: { value: new THREE.Color(0.11, 0.11, 0.12) }, blueInk: { value: new THREE.Color(0.25, 0.55, 0.85) },
-        hatch: { value: 5 }, grain: { value: 0.6 }, lineVar: { value: 0.7 }, paper: { value: new THREE.Color("#e6d3ae") }, sepia: { value: new THREE.Color("#2a1d12") },
-        burst: { value: true }, burstA: { value: new THREE.Color("#ffb36b") }, burstB: { value: new THREE.Color("#d23c35") }, focus: { value: new THREE.Vector2(0.5, 0.55) }, fxType: { value: 0 }, fxAmt: { value: 0 }, fxAng: { value: 0 }, fisheye: { value: 0 }, fxInk: { value: new THREE.Color(0.08, 0.07, 0.07) },
+        hatch: { value: 5 }, detail: { value: 0.6 }, grain: { value: 0.6 }, lineVar: { value: 0.7 }, paper: { value: new THREE.Color("#e6d3ae") }, sepia: { value: new THREE.Color("#2a1d12") },
+        shadeTint: { value: new THREE.Color("#1f3550") }, lightTint: { value: new THREE.Color("#d8ecff") }, burst: { value: true }, burstA: { value: new THREE.Color("#ffb36b") }, burstB: { value: new THREE.Color("#d23c35") }, focus: { value: new THREE.Vector2(0.5, 0.55) }, fxType: { value: 0 }, fxAmt: { value: 0 }, fxAng: { value: 0 }, fisheye: { value: 0 }, fxInk: { value: new THREE.Color(0.08, 0.07, 0.07) },
       },
     });
     this.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.mat);
@@ -273,11 +316,12 @@ export class Composer {
     const rt = opts.rt || this.rt, nrt = opts.nrt || this.nrt;
     if (view.mode === "luz") this.lightNotes(scene, camera, rt, opts);
     else { r.setRenderTarget(rt); r.render(scene, camera); }
-    const artist = view.mode === "grabado" || view.mode === "dinamico";
+    const artist = view.mode === "grabado" || view.mode === "dinamico" || view.mode === "pintura";
     const wantN = view.outline || opts.blue || artist;
     if (wantN) {
       const bg = scene.background, fog = scene.fog;
       scene.overrideMaterial = this.normalMat; scene.background = null; scene.fog = null;
+      scene.traverse(o => { if (o.userData.noLines && !hideForNormals.includes(o)) hideForNormals = [...hideForNormals, o]; });
       const vis = hideForNormals.map(o => o.visible); hideForNormals.forEach(o => (o.visible = false));
       r.setRenderTarget(nrt); r.setClearColor(0x000000, 0); r.clear(); r.render(scene, camera);
       hideForNormals.forEach((o, i) => (o.visible = vis[i]));
@@ -298,8 +342,9 @@ export class Composer {
     u.contourOnly.value = !!view.contourOnly;
     u.clearBg.value = !!opts.clearBg;
     u.hatch.value = (view.hatch || 5) * (opts.scale || 1);
-    u.grain.value = view.grain ?? 0.6; u.lineVar.value = view.lineVar ?? 0.6;
+    u.grain.value = view.grain ?? 0.6; u.detail.value = view.detail ?? 0.6; u.lineVar.value = view.lineVar ?? 0.6;
     u.paper.value.set(view.paper || "#e6d3ae"); u.sepia.value.set(view.sepia || "#2a1d12");
+    u.shadeTint.value.set(view.shadeTint || "#1f3550"); u.lightTint.value.set(view.lightTint || "#d8ecff");
     u.burst.value = view.burst !== false; u.burstA.value.set(view.burstA || "#ffb36b"); u.burstB.value.set(view.burstB || "#d23c35");
     u.fxType.value = FX_INDEX[view.fx] || 0; u.fxAmt.value = view.fxAmt ?? 0.6; u.fxAng.value = (view.fxAng || 0) * Math.PI / 180;
     u.fisheye.value = view.fisheye || 0; u.focus.value.set(view.focusX ?? 0.5, view.focusY ?? 0.55);
@@ -320,7 +365,7 @@ Composer.prototype.lightNotes = function (scene, camera, rt, opts) {
   const vis = lights.map(l => l.visible), bg = scene.background, fog = scene.fog;
   const cc = r.getClearColor(new THREE.Color()), ca = r.getClearAlpha();
   lights.forEach(l => (l.visible = l === key));
-  const aux = []; scene.traverse(o => { if ((o.isLine || o.isPoints || o.isSprite) && o.visible) { aux.push(o); o.visible = false; } });
+  const aux = []; scene.traverse(o => { if ((o.isLine || o.isPoints || o.isSprite || o.userData.noLines) && o.visible) { aux.push(o); o.visible = false; } });
   scene.background = null; scene.fog = null; scene.overrideMaterial = whiteMat;
   r.setClearColor(0x000000, 1);
   r.setRenderTarget(rt); r.clear(); r.render(scene, camera);
@@ -344,7 +389,7 @@ Composer.prototype.lightNotes = function (scene, camera, rt, opts) {
 
 export function thresholds(view) {
   const m = view.mode;
-  const t = m === "noir" || m === "manga" ? 2 : m === "cel" || m === "grabado" || m === "dinamico" ? 3 : view.tones || 3, k = view.th ?? 0.5;
+  const t = m === "noir" || m === "manga" ? 2 : m === "cel" || m === "grabado" || m === "dinamico" || m === "pintura" ? 3 : view.tones || 3, k = view.th ?? 0.5;
   const shift = (k - 0.5) * 0.4;
   const base = t === 2 ? [0.5, 1, 1, 1] : t === 3 ? [0.33, 0.66, 1, 1] : [0.2, 0.4, 0.6, 0.8];
   if (m === "noir") base[0] = 0.32;

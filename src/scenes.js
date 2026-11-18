@@ -76,7 +76,7 @@ export function sceneFor(v, { lowEnd = true, mode } = {}) {
   let hideFloor = false;
   for (const o of v.objects) {
     const { g, fig } = buildObject3D(o);
-    if (o.color) paint(g, o.color, useColor);
+    if (o.color || o.tex) paint(g, o.color || null, useColor && (mode || view.mode) !== "grabado", o.tex);
     if (g.userData.hidesFloor) hideFloor = true;
     content.add(g); world.set(o.id, g); if (fig) { fig.root.userData.isFigure = true; figs.set(o.id, fig); }
   }

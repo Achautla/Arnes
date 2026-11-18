@@ -23,7 +23,7 @@ export async function analyzeLocal(file) {
   for (let i = 0; i < n; i++) {
     const r = d[i * 4], g = d[i * 4 + 1], b = d[i * 4 + 2];
     L[i] = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-    S[i] = (Math.max(r, g, b) - Math.min(r, g, b)) / 255;
+    const mx = Math.max(r, g, b); S[i] = mx > 30 ? (mx - Math.min(r, g, b)) / mx : 0; // saturación HSV: también ve el color en las sombras
   }
   const sorted = Float32Array.from(L).sort();
   const pct = p => sorted[Math.floor(clamp(p, 0, 0.999) * n)];
@@ -50,14 +50,22 @@ export async function analyzeLocal(file) {
   const period = runs ? (runLen / runs) * 2 : 8;
   // una viñeta ocupa cerca de la mitad del alto de la página; el visor muestra una viñeta en ~900 px
   const hatch = clamp(period * (900 / (h * 0.45)) * 0.6, 3, 7);
-  const color = meanSat > 0.14;
+  const color = meanSat > 0.22;
+  // los negros del cómic de color plano son neutros; en una ilustración pintada las sombras llevan color
+  let ds = 0, dn = 0; for (let i = 0; i < n; i += 2) if (L[i] < 0.3 && L[i] > 0.03) { ds += S[i]; dn++; }
+  const darkTint = dn ? ds / dn : 0;
+  const painted = color && darkTint > 0.3;
   const report = [];
   report.push(`Papel ${hex(paper)} y tinta ${hex(ink)}.`);
   report.push(`Mancha oscura en el ${Math.round(darkFrac * 100)} % de la página.`);
-  report.push(color ? "Página a color: se calibra como color dinámico." : `Página monocroma, rayado cada ${hatch.toFixed(1)} px a tamaño de pantalla.`);
+  report.push(painted ? "Imagen pintada a color: se calibra como pintura, con tus tintes de sombra y de luz." : color ? "Página de color plano: se calibra como color dinámico." : `Página monocroma, rayado cada ${hatch.toFixed(1)} px a tamaño de pantalla.`);
   const th = clamp(0.3 + darkFrac * 0.4, 0.25, 0.75);
   let view;
-  if (color) {
+  if (painted) {
+    const tint = (from, to) => { const s = [0, 0, 0]; let k = 0; for (let i = 0; i < n; i += 3) if (L[i] >= from && L[i] <= to) { s[0] += d[i * 4]; s[1] += d[i * 4 + 1]; s[2] += d[i * 4 + 2]; k++; } return s.map(v => v / Math.max(k, 1)); };
+    const norm = (c, target) => { const l = (0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]) / 255 || 0.01; return c.map(v => v * target / l); };
+    view = { mode: "pintura", th, thick: 1, outline: true, lineVar: 0.5, detail: 0.5, grain: +clamp(grainStd * 10 + 0.3, 0.2, 1).toFixed(2), shadeTint: hex(norm(tint(pct(0.05), pct(0.35)), 0.3)), lightTint: hex(norm(tint(pct(0.85), 1), 0.88)) };
+  } else if (color) {
     const sat = []; for (let i = 0; i < n; i += 2) if (S[i] > 0.35) sat.push(i);
     sat.sort((a, b) => L[b] - L[a]);
     const avg = arr => { const s = [0, 0, 0]; arr.forEach(i => { s[0] += d[i * 4]; s[1] += d[i * 4 + 1]; s[2] += d[i * 4 + 2]; }); return s.map(v => v / Math.max(arr.length, 1)); };
@@ -72,7 +80,7 @@ export async function analyzeLocal(file) {
 // Lectura con Gemini: devuelve los mismos parámetros, ajustados por un modelo que ve la página
 const PROMPT = `Eres un asistente de entintado para cómic. Mira esta página de un artista y propone parámetros para que un render 3D imite su estilo.
 Responde SOLO un JSON con estas claves:
-- "mode": "grabado" (blanco y negro o sepia, con plumilla y rayado) o "dinamico" (color plano saturado con negros de sombra)
+- "mode": "grabado" (blanco y negro o sepia, con plumilla y rayado), "dinamico" (color plano saturado con negros de sombra, estilo cómic) o "pintura" (ilustración pintada a color, con degradados, atmósfera, noche o niebla)
 - "th": 0.2 a 0.85, cuánta sombra hay (más alto = más negro)
 - "thick": 0.75 a 3, grosor base de la línea en píxeles
 - "lineVar": 0 a 1, cuánto varía el grosor de la línea (0 = línea técnica pareja, 1 = pincel muy vivo)
@@ -80,6 +88,8 @@ Responde SOLO un JSON con estas claves:
 - "grain": 0 a 1, textura y envejecido del papel (solo grabado)
 - "paper": color del papel en #rrggbb, "sepia": color de la tinta en #rrggbb (solo grabado)
 - "burstA": color claro dominante en #rrggbb, "burstB": color oscuro o de orilla en #rrggbb (solo dinamico)
+- "shadeTint": color de las sombras en #rrggbb, "lightTint": color de las luces en #rrggbb (solo pintura)
+- "grain": también vale para pintura: cuánta textura de pincel se nota
 - "nombre": un nombre corto para el estilo, en español
 - "notas": dos frases en español sobre lo que caracteriza el trazo (línea, negros, rayado, textura)`;
 
@@ -110,9 +120,10 @@ export async function analyzeAI(canvas, { key, model }, local) {
   let o; try { o = JSON.parse(txt.replace(/^```(json)?|```$/g, "").trim()); } catch { throw new Error("Gemini respondió algo que no se pudo leer. Se usó solo la lectura local."); }
   const isHex = v => typeof v === "string" && /^#[0-9a-f]{6}$/i.test(v);
   const num = (v, a, b, def) => (typeof v === "number" && isFinite(v) ? clamp(v, a, b) : def);
-  const mode = o.mode === "dinamico" || o.mode === "grabado" ? o.mode : local.mode;
+  const mode = ["dinamico", "grabado", "pintura"].includes(o.mode) ? o.mode : local.mode;
   const view = { ...local, mode, th: num(o.th, 0.2, 0.85, local.th), thick: num(o.thick, 0.75, 3, local.thick), lineVar: num(o.lineVar, 0, 1, local.lineVar ?? 0.6) };
   if (mode === "grabado") Object.assign(view, { hatch: num(o.hatch, 3, 12, local.hatch ?? 5), grain: num(o.grain, 0, 1, local.grain ?? 0.6), paper: isHex(o.paper) ? o.paper : local.paper || "#e6d3ae", sepia: isHex(o.sepia) ? o.sepia : local.sepia || "#2a1d12", background: "papel" });
+  else if (mode === "pintura") Object.assign(view, { grain: num(o.grain, 0, 1, local.grain ?? 0.6), detail: local.detail ?? 0.5, shadeTint: isHex(o.shadeTint) ? o.shadeTint : local.shadeTint || "#1f3550", lightTint: isHex(o.lightTint) ? o.lightTint : local.lightTint || "#d8ecff" });
   else Object.assign(view, { burst: true, burstA: isHex(o.burstA) ? o.burstA : local.burstA || "#ffb36b", burstB: isHex(o.burstB) ? o.burstB : local.burstB || "#d23c35" });
   return { view, name: typeof o.nombre === "string" ? o.nombre.slice(0, 40) : "", notes: typeof o.notas === "string" ? o.notas.slice(0, 400) : "" };
 }

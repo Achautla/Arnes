@@ -2,7 +2,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
-import { DEG, RAD, clamp, uid, clone, round, escapeHtml as esc, saveFile, kelvinToColor as kelvinColor, paint } from "./util.js";
+import { DEG, RAD, clamp, uid, clone, round, escapeHtml as esc, saveFile, kelvinToColor as kelvinColor, paint, TEXTURES } from "./util.js";
 import * as M from "./mannequin.js";
 import { POSE_LIBRARY, POSE_CATS } from "./poses.js";
 import { PRIMITIVES, PROPS, EXTRA_PROPS, TERRAIN, TERRAIN_TYPES, ALL_PROPS, buildProp } from "./props.js";
@@ -145,7 +145,7 @@ function buildObject(o) {
   }
   g.userData.objId = o.id;
   g.traverse(c => { c.userData.objId = o.id; });
-  if (o.color) paint(g, o.color, store.v.view.mode !== "clay");
+  if (o.color || o.tex) paint(g, o.color || null, !["clay", "grabado"].includes(store.v.view.mode), o.tex);
   if (store.v.view.forms && o.kind === "figure") addForms(g);
   g.updateMatrixWorld(true);
   world.set(o.id, g); content.add(g);
@@ -201,7 +201,7 @@ function applyBackground() {
 function repaintAll() {
   const useColor = !["clay", "grabado"].includes(store.v.view.mode);
   for (const f of figs.values()) { f.dress?.setStyle({ color: useColor, map: !!store.v.view.tension }); f.acc?.setStyle(useColor); }
-  for (const o of store.v.objects) { const g = world.get(o.id); if (g) paint(g, o.color || null, useColor); }
+  for (const o of store.v.objects) { const g = world.get(o.id); if (g) paint(g, o.color || null, useColor, o.tex); }
 }
 // Formas básicas: cajas de construcción sobre cada parte del cuerpo (ayuda para dibujar)
 const formsMat = new THREE.LineBasicMaterial({ color: 0x3e7fb0, transparent: true, opacity: 0.85 });
@@ -915,11 +915,13 @@ function propsOf(o) {
   <div class="nums">${isFig ? num("ry", "Giro", Math.round(o.rotY || 0), "°") : num("rx", "Giro X", Math.round(o.rot[0]), "°") + num("ry", "Giro Y", Math.round(o.rot[1]), "°") + num("rz", "Giro Z", Math.round(o.rot[2]), "°")}</div>`;
   if (!isFig) {
     const pp = Object.entries(o.params || {}).filter(([k, val]) => typeof val === "number");
+    if (o.type === "humo") h += `<div class="pills">${[["claro", "Humo claro"], ["oscuro", "Humo oscuro"]].map(([k, l]) => pill(k, o.params.tono || "claro", l, "smoke-tone")).join("")}</div><p class="sub">Ponlo sobre un cigarro, una taza o un cañón. Cambia la semilla para otra forma de voluta.</p>`;
     if (o.type === "terreno") h += `<div class="pills">${Object.entries(TERRAIN_TYPES).map(([k, l]) => pill(k, o.params.tipo, l, "terrain")).join("")}</div>`;
-    if (pp.length) h += `<div class="nums">${pp.map(([k, val]) => num("param:" + k, k[0].toUpperCase() + k.slice(1), val, ["escalones", "pisos", "semilla"].includes(k) ? "" : "cm")).join("")}</div>`;
+    if (pp.length) h += `<div class="nums">${pp.map(([k, val]) => num("param:" + k, k[0].toUpperCase() + k.slice(1), val, ["escalones", "pisos", "semilla"].includes(k) ? "" : k === "densidad" ? "%" : "cm")).join("")}</div>`;
     h += `<div class="nums">${num("scale", "Escala", Math.round((o.scale?.[0] ?? 1) * 100), "%")}</div>`;
   }
   if (isFig) h += clothesPanel(o);
+  if (!isFig && o.type !== "humo") h += `<h3>Textura</h3><div class="pills">${Object.entries(TEXTURES).map(([k, l]) => pill(k, o.tex || "lisa", l, "obj-tex")).join("")}</div>`;
   h += `<div class="row colorrow"><label class="sel"><span>${isFig ? "Color de la piel o del maniquí" : "Color (para estilos de color y para separar planos)"}</span><input type="color" data-act="obj-color" value="${o.color || "#bdb6ac"}"></label>${o.color ? `<button class="btn" data-act="obj-nocolor">Quitar color</button>` : ""}</div>`;
   h += `<div class="row"><button class="btn" data-act="dup">Duplicar</button><button class="btn" data-act="fwd">Copiar a viñetas siguientes</button><button class="btn danger" data-act="del">Borrar</button></div></div>`;
   return h;
@@ -1188,9 +1190,9 @@ function panelCamara() {
   <p class="sub">Para un escorzo extremo (el puño que se agranda hacia el lector), baja el lente a 8–14 mm y acerca la cámara a la mano.</p>
   <h3>Efecto de viñeta</h3><div class="pills">${Object.entries(FX).map(([k, l]) => pill(k, v.fx || "ninguno", l, "fx")).join("")}</div>`;
   if (v.fx && v.fx !== "ninguno") h += slider("fxAmt", "Intensidad", v.fxAmt ?? 0.6, 0.1, 1, 0.05, "", "view-r")
-    + (v.fx === "velocidad" ? slider("fxAng", "Dirección del movimiento", v.fxAng || 0, -180, 180, 5, "°", "view-r") : "")
-    + slider("focusX", "Centro (izquierda ↔ derecha)", v.focusX ?? 0.5, 0, 1, 0.01, "", "view-r") + slider("focusY", "Centro (abajo ↔ arriba)", v.focusY ?? 0.55, 0, 1, 0.01, "", "view-r")
-    + `<p class="sub">${{ velocidad: "Las líneas despejan el centro y se cargan hacia los bordes: el centro va sobre lo que se mueve.", enfoque: "Rayos que apuntan al centro: llevan la mirada al gesto o al objeto clave.", impacto: "Invierte la viñeta en negro y blanco con rayos: para el instante del golpe." }[v.fx]}</p>`;
+    + (v.fx === "velocidad" || v.fx === "lluvia" ? slider("fxAng", v.fx === "lluvia" ? "Viento (inclina la lluvia)" : "Dirección del movimiento", v.fxAng || 0, -180, 180, 5, "°", "view-r") : "")
+    + (v.fx === "lluvia" ? "" : slider("focusX", "Centro (izquierda ↔ derecha)", v.focusX ?? 0.5, 0, 1, 0.01, "", "view-r") + slider("focusY", "Centro (abajo ↔ arriba)", v.focusY ?? 0.55, 0, 1, 0.01, "", "view-r"))
+    + `<p class="sub">${{ velocidad: "Las líneas despejan el centro y se cargan hacia los bordes: el centro va sobre lo que se mueve.", enfoque: "Rayos que apuntan al centro: llevan la mirada al gesto o al objeto clave.", impacto: "Invierte la viñeta en negro y blanco con rayos: para el instante del golpe.", lluvia: "Trazos cortos e inclinados; en zonas oscuras la lluvia se ve clara, como en el noir." }[v.fx]}</p>`;
   h += `<h3>Proporción de la viñeta</h3><div class="pills">${Object.keys(ASPECTS).map(k => pill(k, c.aspect, k === "libre" ? "Libre" : k, "aspect")).join("")}${typeof c.aspect === "number" ? pill("page", "page", `De su recuadro (${round(c.aspect, 2)}:1)`, "noop") : ""}</div>`;
   h += `<h3>Vistas libres</h3><div class="pills">${[["front", "Frente"], ["side", "Lado"], ["top", "Arriba"], ["persp", "Tres cuartos"]].map(([k, l]) => pill(k, "", l, "view-free")).join("")}</div>`;
   h += `<div class="toggles">${toggle("horizon", "Línea de horizonte", "Siempre a la altura del ojo de la cámara", v.horizon)}${toggle("vp", "Puntos de fuga", "De la grilla del piso y de las verticales", v.vp)}</div>`;
@@ -1215,7 +1217,7 @@ function panelLuz() {
     <div class="row"><button class="btn" data-act="fwd">Copiar a viñetas siguientes</button><button class="btn danger" data-act="del">Borrar luz</button></div></div>`;
   }
   h += `<h2>Semirender</h2><div class="pills">${Object.entries(MODES).map(([k, l]) => pill(k, v.mode, l, "mode")).join("")}</div>`;
-  const tips = { clay: "Volumen gris, sin color.", color: "Usa el color que le diste a cada objeto.", values: "Agrupa la luz en 2, 3 o 5 tonos.", noir: "Solo negro y blanco: decide dónde van las masas de negro.", manga: "Medios tonos como tramas de puntos.", cel: "Color plano en tres tonos.", grabado: "Plumilla sobre papel envejecido: rayado cruzado que sigue la forma, negros sólidos y línea que engorda en la sombra. Sale de tus páginas de The Elder's Apprentice.", dinamico: "Color plano saturado, negros de sombra, luz de contorno y cielo de estallido, como los reels de viñeta animada.", luz: "Cómo cae la luz principal sobre cada forma: así se decide dónde va cada tono al dibujar." };
+  const tips = { clay: "Volumen gris, sin color.", color: "Usa el color que le diste a cada objeto.", values: "Agrupa la luz en 2, 3 o 5 tonos.", noir: "Solo negro y blanco: decide dónde van las masas de negro.", manga: "Medios tonos como tramas de puntos.", cel: "Color plano en tres tonos.", grabado: "Plumilla sobre papel envejecido: rayado cruzado que sigue la forma, negros sólidos y línea que engorda en la sombra. Sale de tus páginas de The Elder's Apprentice.", dinamico: "Color plano saturado, negros de sombra, luz de contorno y cielo de estallido, como los reels de viñeta animada.", pintura: "Ilustración pintada: conserva color y luz, agrupa valores en manchas, tiñe sombras y luces con tu paleta y deja textura de pincel.", luz: "Cómo cae la luz principal sobre cada forma: así se decide dónde va cada tono al dibujar." };
   h += `<p class="sub">${tips[v.mode] || ""}</p>`;
   const mine = savedStyles();
   h += `<h3>Estilos de artista</h3><div class="olist">${[...BASE_STYLES, ...mine].map((st, i) => `<button class="oitem" data-act="style-apply" data-val="${i}"><span>${esc(st.name)}</span><small>${MODES[st.view.mode] || ""}${st.base ? " · de base" : " · tuyo"}</small></button>`).join("")}</div>
@@ -1236,10 +1238,12 @@ function panelLuz() {
     <p class="sub">El terminador es la frontera entre luz y sombra propia: ahí la forma gira y el tono cambia más rápido. La luz reflejada es la que rebota del piso en la sombra.</p>`;
   if (v.mode === "values") h += `<div class="pills"><span class="pl">Tonos</span>${[2, 3, 5].map(n => pill(String(n), String(v.tones), String(n), "tones")).join("")}</div>`;
   if (!["clay", "color", "luz"].includes(v.mode)) h += slider("th", "Umbral (más luz ↔ más sombra)", v.th, 0, 1, 0.05, "", "view-r");
-  const artist = v.mode === "grabado" || v.mode === "dinamico";
-  if (artist) h += slider("lineVar", "Variación de la línea (pareja ↔ viva)", v.lineVar ?? 0.6, 0, 1, 0.05, "", "view-r");
+  const artist = v.mode === "grabado" || v.mode === "dinamico" || v.mode === "pintura";
+  if (artist) h += slider("lineVar", "Variación de la línea (pareja ↔ viva)", v.lineVar ?? 0.6, 0, 1, 0.05, "", "view-r") + slider("detail", "Detalle de texturas (juntas, vetas, hojas)", v.detail ?? 0.6, 0, 1, 0.05, "", "view-r");
   if (v.mode === "grabado") h += slider("hatch", "Separación del rayado", v.hatch || 5, 3, 12, 0.5, " px", "view-r") + slider("grain", "Grano y envejecido del papel", v.grain ?? 0.6, 0, 1, 0.05, "", "view-r")
     + `<div class="row colorrow"><label class="sel"><span>Papel</span><input type="color" data-act="view-color" data-key="paper" value="${v.paper || "#e6d3ae"}"></label><label class="sel"><span>Tinta</span><input type="color" data-act="view-color" data-key="sepia" value="${v.sepia || "#2a1d12"}"></label></div>`;
+  if (v.mode === "pintura") h += slider("grain", "Textura de pincel", v.grain ?? 0.6, 0, 1, 0.05, "", "view-r")
+    + `<div class="row colorrow"><label class="sel"><span>Tinte de sombra</span><input type="color" data-act="view-color" data-key="shadeTint" value="${v.shadeTint || "#1f3550"}"></label><label class="sel"><span>Tinte de luz</span><input type="color" data-act="view-color" data-key="lightTint" value="${v.lightTint || "#d8ecff"}"></label></div>`;
   if (v.mode === "dinamico") h += `<div class="toggles">${toggle("burst", "Cielo de estallido", "Rayos desde el centro de la viñeta", v.burst !== false)}</div>`
     + (v.burst !== false ? `<div class="row colorrow"><label class="sel"><span>Centro</span><input type="color" data-act="view-color" data-key="burstA" value="${v.burstA || "#ffb36b"}"></label><label class="sel"><span>Orilla</span><input type="color" data-act="view-color" data-key="burstB" value="${v.burstB || "#d23c35"}"></label></div>` : "");
   if (v.mode === "manga") h += slider("dot", "Tamaño de la trama", v.dot || 7, 3, 16, 1, " px", "view-r");
@@ -1402,7 +1406,7 @@ panel.addEventListener("click", e => {
     case "drill-start": startDrill(o); break;
     case "clothq": v.view.clothQ = val; rebuildScene(); store.commit(); renderPanel(); markDirty(3); break;
     case "terrain": { o.params.tipo = val; rebuildObject(o); applyBackground(); store.commit(); renderPanel(); markDirty(); break; }
-    case "obj-nocolor": { delete o.color; paint(world.get(o.id), null); store.commit(); renderPanel(); markDirty(); break; }
+    case "obj-nocolor": { delete o.color; paint(world.get(o.id), null, true, o.tex); store.commit(); renderPanel(); markDirty(); break; }
     case "light-nocolor": { const l = selLight(); delete l.color; rebuildLights(); attachGizmo(); store.commit(); renderPanel(); markDirty(); break; }
     case "gobo": { const l = selLight(); l.gobo = val; if (val !== "ninguno") l.shadow = true; rebuildLights(); attachGizmo(); store.commit(); renderPanel(); markDirty(); break; }
     case "aspect": v.camera.aspect = val; layoutFrame(); store.commit(); renderPanel(); markDirty(); break;
@@ -1419,6 +1423,8 @@ panel.addEventListener("click", e => {
     }
     case "style-del": { const list = savedStyles(); const [st] = list.splice(+val, 1); writeStyles(list); renderPanel(); if (st) toast(`Se borró «${st.name}».`); break; }
     case "ai-forget": writeAi({ model: aiConf().model }); renderPanel(); toast("Se quitó la clave de este dispositivo."); break;
+    case "obj-tex": { const o = selObj(); if (o) { if (val === "lisa") delete o.tex; else o.tex = val; paint(world.get(o.id), o.color || null, !["clay", "grabado"].includes(v.view.mode), o.tex); store.commit(); renderPanel(); markDirty(); } break; }
+    case "smoke-tone": { const o = selObj(); if (o) { o.params.tono = val; rebuildObject(o); store.commit(); renderPanel(); markDirty(); } break; }
     case "fx": v.view.fx = val; store.commit(); renderPanel(); markDirty(); break;
     case "tones": v.view.tones = +val; store.commit(); renderPanel(); markDirty(); break;
     case "bg": v.view.background = val; applyBackground(); store.commit(); renderPanel(); markDirty(); break;
@@ -1466,7 +1472,7 @@ panel.addEventListener("change", e => {
   if (!act) return;
   const o = selObj(), v = store.v;
   if (pageEd.onChangeEl(act, el)) return;
-  if (act === "obj-color") { o.color = el.value; paint(world.get(o.id), o.color, store.v.view.mode !== "clay"); if (store.v.view.mode === "clay") toast("El color se ve en los estilos Color, Cel, Noir, Manga y Valores."); store.commit(); renderPanel(); markDirty(); return; }
+  if (act === "obj-color") { o.color = el.value; paint(world.get(o.id), o.color, store.v.view.mode !== "clay", o.tex); if (store.v.view.mode === "clay") toast("El color se ve en los estilos Color, Cel, Noir, Manga y Valores."); store.commit(); renderPanel(); markDirty(); return; }
   if (act === "garment-color" || act === "garment" || act === "garment-t") {
     const g = o.clothes.find(x => x.id === ui.garment); if (!g) return;
     if (act === "garment-color") g.color = el.value; else if (act === "garment") g[key] = +el.value; else g[key] = el.checked;

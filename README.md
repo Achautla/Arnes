@@ -2,6 +2,13 @@
 
 Storyboard 3D para cómic: posar personajes, colocar cámaras y luces, y obtener un semirender (volumen, sombras y valores) para dibujar a lápiz.
 
+## Fase 4 · detalles de render y pintura (18-nov)
+
+- **Texturas de superficie** por objeto: madera, ladrillo, follaje, piedra, tela y metal gastado. Los estilos de artista las entintan como juntas, vetas, hojas y grietas (control «Detalle de texturas»).
+- **Humo o vapor** como objeto: volutas que miran a la cámara, claras u oscuras, sin contorno.
+- **Lluvia** como efecto de viñeta, con viento.
+- **Pintura:** tercer estilo de artista para ilustración a color con atmósfera (sombras y luces teñidas, valores en manchas, textura de pincel). La calibración lo elige para imágenes pintadas; el grabado ya no acepta papel oscuro.
+
 ## Fase 4 · bloque 2 y calibración (18-nov)
 
 - **Efectos de viñeta** (pestaña Cámara): líneas de velocidad con dirección, líneas de enfoque, marco de impacto en negro y blanco, con centro e intensidad ajustables.
