@@ -1,0 +1,11 @@
+{
+  "name": "Arnés",
+  "short_name": "Arnés",
+  "description": "Storyboard 3D para cómic: poses, cámara, luz y semirender para dibujar a lápiz.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#1d2023",
+  "theme_color": "#1d2023",
+  "lang": "es",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
