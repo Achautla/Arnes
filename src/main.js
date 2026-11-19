@@ -12,16 +12,17 @@ import { applyAtmosphere, aspectOf, sceneFor, disposeScene } from "./scenes.js";
 import { SCENARIOS } from "./scenarios.js";
 import { createPageEditor, styleView, FORMATS, newPage } from "./page.js";
 import { detectLocal, detectAI, readingOrder, toPagePanels } from "./pageread.js";
+import { readPanel, KP_LABELS } from "./scenebuild.js";
 import { Store, ASPECTS, newVineta, defaultView, defaultCamera } from "./store.js";
 import { buildExample } from "./example.js";
 import { createHome } from "./home.js";
 import * as share from "./share.js";
 import { gatherObstacles, deformSkin, resetSkin } from "./contact.js";
-import { dress, GARMENTS, MATERIALS, FOLD_TYPES, newGarment, HAIR_STYLES } from "./cloth.js";
+import { dress, GARMENTS, MATERIALS, FOLD_TYPES, newGarment, HAIR_STYLES, CLOTH_TEX } from "./cloth.js";
 import { equip, ACCESSORIES, MATERIALS as ACC_MATS, FINGER_NAMES, newAccessory } from "./accessories.js";
 import * as cloud from "./cloud.js";
 import { analyzeLocal, analyzeAI, AI_DEFAULT_MODEL } from "./calibrate.js";
-import { drawStrokes, aiFinish, AI_IMAGE_MODEL } from "./strokes.js";
+import { drawStrokes, aiFinish, AI_IMAGE_MODEL, extractStrokes, loadBrushes } from "./strokes.js";
 import { makeVideo } from "./video.js";
 
 const PAPER = 0xf1f0ec, DARK = 0x111214, BLUE = 0x7cc0ea, BLUE_DEEP = 0x3e7fb0;
@@ -138,7 +139,7 @@ function buildObject(o) {
     g = fig.root;
     g.position.fromArray(o.pos); g.rotation.set(0, (o.rotY || 0) * DEG, 0);
     fig.root.userData.isFigure = true;
-    if (o.clothes?.length || hasHair(o)) dressFig(o, fig);
+    if (o.clothes?.length || hasHair(o) || o.tex === "piel") dressFig(o, fig);
     if (o.accessories?.length) fig.acc = equip(fig, o.accessories, { useColor: store.v.view.mode !== "clay" });
   } else {
     g = buildProp(o.type, o.params);
@@ -159,9 +160,20 @@ function dressFig(o, fig) {
   fig.root.updateMatrixWorld(true);
   resetSkin(fig); // la ropa se mide sobre el cuerpo sin aplastar
   fig.dress?.dispose();
-  fig.dress = o.clothes?.length || hasHair(o) ? dress(fig, o.clothes || [], { obstacles: () => obstaclesFor(fig), hair: o.hair, quality: v.clothQ, useColor: v.mode !== "clay", map: !!v.tension, wind: v.wind || 0, windDir: v.windDir || 0 }) : null;
+  const skin = o.tex === "piel" ? [{ id: "piel", type: "piel", color: o.color || "#c99a76", mat: "piel", ease: 0.15 }] : [];
+  const clothes = [...skin, ...(o.clothes || [])];
+  fig.dress = clothes.length || hasHair(o) ? dress(fig, clothes, { obstacles: () => obstaclesFor(fig), hair: o.hair, quality: v.clothQ, useColor: v.mode !== "clay", map: !!v.tension, wind: v.wind || 0, windDir: v.windDir || 0 }) : null;
   fig.root.traverse(c => { c.userData.objId = o.id; });
 }
+// Tipos de cuerpo de partida: proporción, complexión y postura. Se ajustan después con los controles
+const BODY_TYPES = {
+  nino: { label: "Niño (8 años)", params: { height: 128, heads: 5.6, build: 0.3, shape: 0.35 } },
+  joven: { label: "Joven", params: { height: 168, heads: 7.2, build: 0.4, shape: 0.15 } },
+  adulto: { label: "Adulto", params: { height: 176, heads: 7.5, build: 0.5, shape: 0 } },
+  mujer: { label: "Mujer", params: { height: 165, heads: 7.5, build: 0.4, shape: 1 } },
+  viejo: { label: "Persona mayor", params: { height: 168, heads: 7.2, build: 0.38, shape: 0.15 }, posture: { spine2: [10, 0, 0], spine3: [8, 0, 0], neck1: [-6, 0, 0], head: [-6, 0, 0] } },
+  heroico: { label: "Heroico (musculoso natural)", params: { height: 186, heads: 8, build: 1, shape: 0 } },
+};
 const hasHair = o => !!(o.hair && o.hair.style && o.hair.style !== "ninguno");
 const defaultClothQ = matchMedia("(pointer: coarse)").matches || (navigator.hardwareConcurrency || 8) <= 4 ? "media" : "alta";
 const OUTFITS = {
@@ -267,7 +279,7 @@ let tween = null;
 function goTo(pos, target, roll) {
   const c = store.v.camera;
   if (roll !== undefined) c.roll = roll;
-  if (reduceMotion) { camera.position.copy(pos); controls.target.copy(target); storeCamera(); store.touch(); markDirty(); return; }
+  if (reduceMotion || ui.instant) { tween = null; camera.position.copy(pos); controls.target.copy(target); controls.update(); camera.updateMatrixWorld(true); storeCamera(); store.touch(); markDirty(); return; }
   tween = { t0: performance.now(), dur: 520, fromP: camera.position.clone(), fromT: controls.target.clone(), toP: pos.clone(), toT: target.clone() };
 }
 function stepTween(now) {
@@ -893,6 +905,7 @@ function panelEscena() {
   let h = `<h2>Viñetas</h2><p class="sub">Cada viñeta es su propio cuarto 3D. Duplícala para armar la siguiente sin rehacer nada.</p>
   <div class="vlist">${P.vinetas.map((x, i) => `<button class="vitem${i === P.cur ? " on" : ""}" data-act="vineta" data-val="${i}"><b>${i + 1}</b><span>${esc(x.name)}</span></button>`).join("")}</div>
   <div class="row"><button class="btn" data-act="v-dup">Duplicar viñeta</button><button class="btn" data-act="v-new">Nueva vacía</button></div>
+  ${panelDibujo(v)}
   <div class="row"><input class="text" id="vname" value="${esc(v.name)}" aria-label="Nombre de la viñeta"><button class="btn" data-act="v-ren">Renombrar</button><button class="btn danger" data-act="v-del" ${P.vinetas.length < 2 ? "disabled" : ""}>Borrar</button></div>`;
   const chars = savedChars();
   if (chars.length) h += `<h2>Tus personajes</h2><div class="adds">${chars.map((c, i) => `<button class="btn" data-act="char-add" data-val="${i}">+ ${esc(c.name)}</button>`).join("")}</div>
@@ -927,7 +940,10 @@ function propsOf(o) {
   }
   if (isFig) h += clothesPanel(o);
   if (isFig) h += `<h3>Superficie</h3><div class="pills">${pill("madera", o.tex === "piel" ? "piel" : "madera", "Madera (maniquí)", "fig-skin")}${pill("piel", o.tex === "piel" ? "piel" : "madera", "Piel", "fig-skin")}</div>`
-    + (o.tex === "piel" ? `<div class="pills">${Object.entries(SKIN_TONES).map(([k, l]) => `<button class="pill${o.color === k ? " on" : ""}" data-act="fig-tone" data-val="${k}" aria-pressed="${o.color === k}"><span class="sw" style="background:${k}"></span>${l}</button>`).join("")}</div><p class="sub">La piel se ve en todos los estilos de color y en la pintura; el grabado la lee como valor. Por ahora el cuerpo sigue armado por piezas: el cuerpo continuo llega en la Fase 5.</p>` : "");
+    + (o.tex === "piel" ? `<div class="pills">${Object.entries(SKIN_TONES).map(([k, l]) => `<button class="pill${o.color === k ? " on" : ""}" data-act="fig-tone" data-val="${k}" aria-pressed="${o.color === k}"><span class="sw" style="background:${k}"></span>${l}</button>`).join("")}</div><p class="sub">Tronco, brazos y piernas quedan cubiertos por una piel continua que se dobla con las articulaciones; cabeza, manos y pies conservan la forma del maniquí con el mismo tono.</p>` : "");
+  if (isFig) h += `<h3>Hojas de modelo</h3><p class="sub">Frente, perfil y espalda de este personaje dibujados por ti. El acabado con IA las usa para que se vea igual en todas las viñetas.</p>
+    ${o.sheets?.length ? `<div class="strokestrip sheets">${o.sheets.map((u, i) => `<button class="sheetb" data-act="sheet-del" data-val="${i}" aria-label="Quitar hoja ${i + 1}"><img src="${u}" alt=""><span>×</span></button>`).join("")}</div>` : ""}
+    <label class="btn wide filebtn">Subir hojas de modelo (hasta 3)<input type="file" id="sheetfile" accept="image/*" multiple hidden></label>`;
   if (!isFig && o.type !== "humo") h += `<h3>Textura</h3><div class="pills">${Object.entries(TEXTURES).map(([k, l]) => pill(k, o.tex || "lisa", l, "obj-tex")).join("")}</div>`;
   h += `<div class="row colorrow"><label class="sel"><span>${isFig ? "Color de la piel o del maniquí" : "Color (para estilos de color y para separar planos)"}</span><input type="color" data-act="obj-color" value="${o.color || "#bdb6ac"}"></label>${o.color ? `<button class="btn" data-act="obj-nocolor">Quitar color</button>` : ""}</div>`;
   h += `<div class="row"><button class="btn" data-act="dup">Duplicar</button><button class="btn" data-act="fwd">Copiar a viñetas siguientes</button><button class="btn danger" data-act="del">Borrar</button></div></div>`;
@@ -938,14 +954,15 @@ function clothesPanel(o) {
   const list = o.clothes || [];
   let h = `<h3>Ropa</h3>`;
   if (!list.length) h += `<p class="sub">Viste al personaje para ver cómo se dobla y cae la tela en cada pose.</p><div class="pills">${Object.entries(OUTFITS).map(([k, d]) => pill(k, "", d.label, "outfit")).join("")}</div>`;
-  h += `<div class="adds">${Object.entries(GARMENTS).map(([k, d]) => `<button class="btn" data-act="garment-add" data-val="${k}">+ ${d.label}</button>`).join("")}</div>`;
+  h += `<div class="adds">${Object.entries(GARMENTS).filter(([, d]) => !d.hidden).map(([k, d]) => `<button class="btn" data-act="garment-add" data-val="${k}">+ ${d.label}</button>`).join("")}</div>`;
   if (list.length) h += `<div class="olist">${list.map(g => `<button class="oitem${g.id === ui.garment ? " on" : ""}" data-act="garment-sel" data-val="${g.id}"><span><i class="swatch" style="background:${g.color}"></i>${GARMENTS[g.type].label}</span><small>${MATERIALS[g.mat].label.split(" (")[0]}</small></button>`).join("")}</div>`;
   const g = list.find(x => x.id === ui.garment);
   if (g) {
     const def = GARMENTS[g.type];
     h += `<div class="card sub-card">
       <div class="row colorrow"><label class="sel"><span>Color de ${def.label.toLowerCase()}</span><input type="color" data-act="garment-color" value="${g.color}"></label></div>
-      <h3>Tela</h3><div class="pills">${Object.entries(MATERIALS).map(([k, m]) => pill(k, g.mat, m.label, "garment-mat")).join("")}</div>
+      <h3>Tela</h3><div class="pills">${Object.entries(MATERIALS).filter(([, m]) => !m.hidden).map(([k, m]) => pill(k, g.mat, m.label, "garment-mat")).join("")}</div>
+      <h3>Textura de la tela</h3><div class="pills">${Object.entries(CLOTH_TEX).map(([k, l]) => pill(k, g.tex || "lisa", l, "garment-tex")).join("")}</div>
       ${slider("ease", "Holgura", g.ease ?? 1.2, 0.3, 5, 0.1, " cm", "garment")}
       ${g.length !== undefined ? slider("length", g.type === "pantalon" ? "Largo (corto ↔ al tobillo)" : "Largo (cadera ↔ tobillo)", g.length, g.type === "pantalon" ? 0.3 : 0.15, 1, 0.01, "", "garment") : ""}
       ${g.sleeve !== undefined ? slider("sleeve", "Manga (sin manga ↔ larga)", g.sleeve, 0, 1, 0.01, "", "garment") : ""}
@@ -1023,6 +1040,159 @@ $("#drill-pause").addEventListener("click", () => { if (drill) { drill.paused = 
 $("#drill-end").addEventListener("click", () => endDrill(false));
 $("#drill-keep").addEventListener("click", () => endDrill(false, true));
 
+// ---------------------------------------------------------------- Viñeta → escena (Fase 5)
+const SKIN_KEYS = Object.fromEntries(Object.entries(SKIN_TONES).map(([hex, l]) => [l.toLowerCase().replace(/\s+/g, "_").normalize("NFD").replace(/[\u0300-\u036f]/g, ""), { label: l, hex }]));
+function buildCatalog() {
+  return {
+    poses: Object.fromEntries(Object.entries(POSE_LIBRARY).map(([k, p]) => [k, p.label || k])),
+    expressions: Object.fromEntries(Object.entries(M.EXPRESSIONS).map(([k, e]) => [k, e.label])),
+    bodies: Object.fromEntries(Object.entries(BODY_TYPES).map(([k, b]) => [k, b.label])),
+    skins: Object.fromEntries(Object.entries(SKIN_KEYS).map(([k, s2]) => [k, s2.label])),
+    garments: Object.fromEntries(Object.entries(GARMENTS).filter(([, g]) => !g.hidden).map(([k, g]) => [k, g.label])),
+    props: Object.fromEntries(Object.entries(ALL_PROPS()).filter(([k]) => !TERRAIN[k]).map(([k, d]) => [k, d.label])),
+    scenarios: Object.fromEntries(Object.entries(SCENARIOS).map(([k, d]) => [k, d.label])),
+    lights: { ...PRESETS },
+  };
+}
+async function cropToDataUrl(file, quad, max = 900) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
+    const xs = quad.map(p => p[0] * img.width), ys = quad.map(p => p[1] * img.height);
+    const x0 = Math.max(0, Math.min(...xs)), y0 = Math.max(0, Math.min(...ys)), w = Math.min(img.width, Math.max(...xs)) - x0, h = Math.min(img.height, Math.max(...ys)) - y0;
+    const k = Math.min(1, max / Math.max(w, h)), c = document.createElement("canvas"); c.width = Math.round(w * k); c.height = Math.round(h * k);
+    c.getContext("2d").drawImage(img, x0, y0, w, h, 0, 0, c.width, c.height);
+    return c.toDataURL("image/jpeg", 0.85);
+  } finally { URL.revokeObjectURL(url); }
+}
+async function readVineta(v) {
+  const ai = aiConf();
+  if (!ai.key) throw new Error("Pon tu clave de Gemini en Luz → «IA para calibrar».");
+  if (!cloud.reachable()) throw new Error("La lectura con IA funciona en la versión de GitHub Pages.");
+  if (!v.ref) throw new Error("Esta viñeta no tiene dibujo. Crea la página desde una foto o sube la viñeta.");
+  v.read = { ...(v.read || {}), scene: await readPanel(v.ref, { key: ai.key, model: ai.model || AI_DEFAULT_MODEL }, buildCatalog()) };
+  store.commit();
+}
+// Arma la escena de la viñeta actual a partir de lo leído (y revisado)
+function buildScene(sc) {
+  const v = store.v;
+  ui.instant = true;
+  try {
+    v.objects = []; v.lights = [];
+    rebuildScene();
+    if (sc.escenario) { const S = SCENARIOS[sc.escenario]; const objs = S.build(); v.objects.push(...objs); for (const ob of objs) buildObject(ob); applyPreset(sc.luz || S.preset); }
+    else applyPreset(sc.luz || "day");
+    const made = [];
+    sc.personajes.forEach((p, i) => {
+      addFigure(); const o = v.objects.at(-1); const fig0 = figs.get(o.id);
+      o.name = p.nombre || `Personaje ${i + 1}`;
+      const bt = BODY_TYPES[p.cuerpo]; if (bt) { Object.assign(o.params, bt.params); o.bodyType = p.cuerpo; }
+      o.tex = "piel"; o.color = SKIN_KEYS[p.piel]?.hex || "#c99a76";
+      o.clothes = p.ropa.map(g => { const gg = newGarment(g.tipo); if (g.color) gg.color = g.color; return gg; });
+      o.face.expr = clone(M.EXPRESSIONS[p.expresion] || M.EXPRESSIONS.neutral);
+      o.pos = [(p.x - 0.5) * 2.4, 0, -(1 - Math.min(1, p.piesY)) * 3];
+      o.pins = {}; void fig0;
+      rebuildObject(o);
+      const lib = POSE_LIBRARY[p.pose]; if (lib) setPose(o, lib);
+      if (bt?.posture) { for (const [j, r] of Object.entries(bt.posture)) o.pose.rot[j] = r.slice(); rebuildObject(o); }
+      groundFigure(figs.get(o.id));
+      made.push({ o, p });
+    });
+    for (const b of sc.objetos) {
+      const def = ALL_PROPS()[b.tipo]; if (!def) continue;
+      const ob = { id: uid("p"), kind: "prop", type: b.tipo, name: def.label, pos: [(b.x - 0.5) * 2.4, 0, -(1 - Math.min(1, b.baseY)) * 3], rot: [0, 0, 0], scale: [b.escala, b.escala, b.escala], params: { ...def.params } };
+      v.objects.push(ob); buildObject(ob);
+    }
+    // cámara: lente, plano y ángulo sobre el personaje principal
+    v.camera.mm = sc.lente; layoutFrame();
+    const main = made.find(m => m.p.principal) || made[0];
+    if (main) select(main.o.id);
+    if (main) applyShot(sc.plano, sc.angulo);
+    // con la cámara puesta, cada cosa va donde la dibujaste: los pies sobre el piso, bajo su punto en la viñeta
+    const cam = exportCamera(), ray = new THREE.Raycaster(), floor = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hit = new THREE.Vector3();
+    const onFloor = (x, y) => { ray.setFromCamera(new THREE.Vector2(x * 2 - 1, -(Math.min(1.05, y) * 2 - 1)), cam); return ray.ray.intersectPlane(floor, hit) ? hit.clone() : null; };
+    for (const { o, p } of made) {
+      if (main && o === main.o) continue;
+      const q = onFloor(p.x, p.piesY); if (q && q.distanceTo(cam.position) < 40) { o.pos = [round(q.x, 2), 0, round(q.z, 2)]; rebuildObject(o); groundFigure(figs.get(o.id)); }
+    }
+    for (const b of v.objects.filter(x => x.kind === "prop" && sc.objetos.some(s2 => s2.tipo === x.type))) {
+      const s2 = sc.objetos.find(z => z.tipo === b.type && !z.used); if (!s2) continue; s2.used = true;
+      const q = onFloor(s2.x, s2.baseY); if (q && q.distanceTo(cam.position) < 40) { b.pos = [round(q.x, 2), b.pos[1], round(q.z, 2)]; rebuildObject(b); }
+    }
+    // giro respecto a la cámara y pose fina con los puntos del dibujo (Fase 5, entrega 3)
+    const camPos = cam.position, right = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion).setY(0).normalize();
+    for (const { o, p } of made) {
+      const fp = new THREE.Vector3(...o.pos), toCam = camPos.clone().sub(fp).setY(0).normalize();
+      const g = p.giro * DEG, dir = toCam.clone().multiplyScalar(Math.cos(g)).addScaledVector(right, Math.sin(g));
+      o.rotY = round(Math.atan2(dir.x, dir.z) / DEG, 1); rebuildObject(o);
+      fitKeypoints(o, p.puntos, cam);
+    }
+    if (sc.roll) v.camera.roll = sc.roll;
+    v.view.fx = sc.efecto; v.view.ruler = false;
+    applyCameraState(); applyBackground(); repaintAll();
+    if (main) applyShot(sc.plano, sc.angulo);
+    store.commit(); renderPanel(); markDirty(3);
+  } finally { ui.instant = false; }
+}
+// Pose fina: cada muñeca y tobillo va hacia su punto en el dibujo, en un plano que pasa por la cadera del personaje
+function fitKeypoints(o, pts, cam) {
+  const fig = figs.get(o.id); if (!fig || !pts) return;
+  fig.root.updateMatrixWorld(true);
+  const hips = fig.joints.hips.getWorldPosition(new THREE.Vector3());
+  const n = new THREE.Vector3(); cam.getWorldDirection(n);
+  // las manos casi siempre van un poco por delante del cuerpo: el plano se adelanta hacia la cámara
+  const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(n, hips.clone().addScaledVector(n, -0.12)), ray = new THREE.Raycaster(), hit = new THREE.Vector3();
+  const at = ([x, y]) => { ray.setFromCamera(new THREE.Vector2(x * 2 - 1, -(y * 2 - 1)), cam); return ray.ray.intersectPlane(plane, hit) ? hit.clone() : null; };
+  // izquierda y derecha del personaje: si en pantalla quedan al revés de como está girado, se intercambian
+  const scr = j => fig.joints[j].getWorldPosition(new THREE.Vector3()).project(cam).x;
+  const lOnRight = scr("shoulder_L") > scr("shoulder_R");
+  const pair = (a, b) => (pts[a] && pts[b] && (pts[a][0] > pts[b][0]) !== lOnRight) ? [b, a] : [a, b];
+  const [wi, wd] = pair("muneca_i", "muneca_d"), [ti, td] = pair("tobillo_i", "tobillo_d");
+  const map = { [wi]: "wrist_L", [wd]: "wrist_R", [ti]: "ankle_L", [td]: "ankle_R" };
+  const before = M.readPose(fig, o.pose);
+  let used = 0;
+  for (const [k, end] of Object.entries(map)) {
+    if (!pts[k] || pts[k][1] > 1.02 || pts[k][1] < -0.02) continue;
+    const t = at(pts[k]); if (!t || t.distanceTo(hips) > fig.d.H) continue;
+    M.solveIK(fig, end, t, o.relaxed, 20); used++;
+  }
+  // si una mano terminó detrás de la espalda (respecto a la cámara), se descarta el ajuste de ese brazo
+  for (const s2 of ["L", "R"]) {
+    const w = fig.joints["wrist_" + s2].getWorldPosition(new THREE.Vector3()), c = fig.joints.chest.getWorldPosition(new THREE.Vector3());
+    if (w.clone().sub(c).dot(n) > 0.12) for (const j of ["shoulder_" + s2, "elbow_" + s2]) M.setJoint(fig, j, before.rot[j], o.relaxed);
+  }
+  if (used) { o.pose = M.readPose(fig, o.pose); rebuildObject(o); groundFigure(figs.get(o.id)); }
+}
+function sceneSummary(sc) {
+  const r = [`${SHOTS[sc.plano]?.label || sc.plano}, ${ANGLES[sc.angulo]?.label.toLowerCase() || sc.angulo}, lente de ${Math.round(sc.lente)} mm${sc.roll ? `, inclinada ${Math.round(sc.roll)}°` : ""}.`];
+  if (sc.escenario) r.push(`Escenario: ${SCENARIOS[sc.escenario].label}.`);
+  if (sc.luz) r.push(`Luz: ${PRESETS[sc.luz]}.`);
+  if (sc.efecto !== "ninguno") r.push(`Efecto: ${FX[sc.efecto]}.`);
+  if (sc.objetos.length) r.push(`Objetos: ${sc.objetos.map(b => ALL_PROPS()[b.tipo]?.label || b.tipo).join(", ")}.`);
+  return r;
+}
+function panelDibujo(v) {
+  const sc = v.read?.scene;
+  let h = `<h3>Desde tu dibujo</h3>`;
+  if (v.ref) h += `<img class="refthumb" src="${v.ref}" alt="Dibujo de esta viñeta">`;
+  else h += `<p class="sub">Sube el dibujo de una sola viñeta, o crea una página desde una foto (pestaña Página) y cada viñeta tendrá su dibujo.</p>`;
+  h += `<label class="btn wide filebtn">${v.ref ? "Cambiar dibujo de la viñeta" : "Subir dibujo de la viñeta"}<input type="file" id="vinfile" accept="image/*" hidden></label>`;
+  if (v.read?.descripcion) h += `<p class="sub">${esc(v.read.descripcion)}</p>`;
+  if (v.ref) h += `<button class="btn wide" data-act="vin-read" ${ui.readBusy ? "disabled" : ""}>${ui.readBusy ? "Gemini está leyendo el dibujo…" : sc ? "Volver a leer el dibujo" : "Leer el dibujo con Gemini"}</button>`;
+  if (sc) {
+    h += `<div class="card calrep"><p class="sub"><strong>Revisa antes de armar.</strong></p>${sceneSummary(sc).map(l => `<p class="sub">${esc(l)}</p>`).join("")}`;
+    sc.personajes.forEach((p, i) => {
+      h += `<div class="readp"><p class="sub"><strong>${esc(p.nombre)}</strong>${p.principal ? " · principal" : ""} · ${Object.keys(p.puntos).length} puntos del esqueleto</p>
+        <label class="sel"><span>Pose</span><select data-act="read-pose" data-key="${i}">${Object.entries(POSE_LIBRARY).map(([k, pl]) => `<option value="${k}"${k === p.pose ? " selected" : ""}>${esc(pl.label || k)}</option>`).join("")}</select></label>
+        <label class="sel"><span>Cuerpo</span><select data-act="read-body" data-key="${i}">${Object.entries(BODY_TYPES).map(([k, b]) => `<option value="${k}"${k === p.cuerpo ? " selected" : ""}>${esc(b.label)}</option>`).join("")}</select></label>
+        <label class="sel"><span>Expresión</span><select data-act="read-expr" data-key="${i}">${Object.entries(M.EXPRESSIONS).map(([k, e]) => `<option value="${k}"${k === p.expresion ? " selected" : ""}>${esc(e.label)}</option>`).join("")}</select></label>
+        <button class="btn" data-act="read-drop" data-val="${i}">Quitar este personaje</button></div>`;
+    });
+    if (sc.notas) h += `<p class="sub">Gemini: ${esc(sc.notas)}</p>`;
+    h += `<button class="btn wide accent" data-act="vin-build">Armar la escena</button><p class="sub">Reemplaza lo que haya en esta viñeta. Puedes deshacer.</p></div>`;
+  }
+  return h;
+}
 async function pageFromPhoto(file) {
   ui.pageBusy = true; ui.pageReport = null; renderPanel();
   const P = store.project, rep = [];
@@ -1059,18 +1229,22 @@ async function pageFromPhoto(file) {
       v.camera.aspect = Math.round((w / h) * 1000) / 1000;
       const m = panels[i];
       if (m.descripcion) v.read = { plano: m.plano || "", angulo: m.angulo || "", personajes: m.personajes ?? null, descripcion: m.descripcion };
+      v._quad = m.quad;
       P.vinetas.push(v);
       return { id: uid("pn"), v: v.id, border: true, pts };
     });
+    for (const pn of pg.panels) { const v = P.vinetas.find(x => x.id === pn.v); if (v?._quad) { v.ref = await cropToDataUrl(file, v._quad); delete v._quad; } }
     P.pages.push(pg); P.curPage = P.pages.length - 1;
     store.commit(); pageEd.draw(); renderPanel();
     rep.unshift(`${pg.panels.length} viñetas encontradas${via === "ia" ? " con Gemini" : " en el teléfono"}, en orden de lectura ${reading === "manga" ? "manga (de derecha a izquierda)" : "occidental"}. Página en formato ${F.label}.`);
     if (via === "ia") panels.slice(0, 8).forEach((m, i) => m.descripcion && rep.push(`${i + 1}. ${m.plano ? m.plano + ", " : ""}${m.descripcion}`));
-    rep.push("Cada viñeta quedó vacía con su proporción. Ábrela para armar la escena; armarla sola desde el dibujo es la siguiente entrega.");
+    rep.push("Cada viñeta quedó vacía con su proporción y su dibujo. Abre una viñeta y en Escena → «Desde tu dibujo» Gemini la lee y la arma.");
     if (via === "local" && pg.panels.length < 2) rep.push("Solo se encontró un recuadro. Si tu página tiene viñetas inclinadas o sin marco, pon tu clave de Gemini para que las encuentre.");
   } catch (e) { console.error(e); rep.push("No se pudo leer esa foto. Prueba con JPG o PNG, con la página entera y derecha."); }
   ui.pageBusy = false; ui.pageReport = rep; renderPanel();
 }
+function myStrokes() { try { return JSON.parse(localStorage.getItem("arnes-strokes") || "[]"); } catch { return []; } }
+function writeStrokes(a) { try { localStorage.setItem("arnes-strokes", JSON.stringify(a)); } catch { toast("No cupieron los trazos en este dispositivo."); } syncProfile(); }
 function refImage() { try { return localStorage.getItem("arnes-ref") || ""; } catch { return ""; } }
 async function setRefImage(file) {
   const url = URL.createObjectURL(file);
@@ -1105,8 +1279,10 @@ async function finalStrokes() {
     // el umbral del estilo desplaza el tono: más sombra → más trazos
     const shift = ((sv.th ?? 0.5) - 0.5) * 0.5;
     if (shift) { const g = tone.getContext("2d"), d = g.getImageData(0, 0, tone.width, tone.height); for (let i = 0; i < d.data.length; i += 4) for (let k = 0; k < 3; k++) d.data[i + k] = Math.max(0, Math.min(255, d.data[i + k] * (1 - shift * 1.6))); g.putImageData(d, 0, 0); }
-    const { canvas, strokes } = await drawStrokes(base, tone, { ink: sv.sepia || "#2a1d12", spacing: Math.max(3, (sv.hatch || 5) * 0.8), lineVar: sv.lineVar ?? 0.7, seed: 7 });
-    showFinal(canvas.toDataURL("image/png"), `${strokes.toLocaleString("es-MX")} trazos a ${w} × ${h} px, con la tinta y el papel de tu estilo.`);
+    const mine = ui.useMine !== false ? myStrokes() : [];
+    const brushes = mine.length ? await loadBrushes(mine, sv.sepia || "#2a1d12") : null;
+    const { canvas, strokes } = await drawStrokes(base, tone, { ink: sv.sepia || "#2a1d12", spacing: Math.max(3, (sv.hatch || 5) * 0.8), lineVar: sv.lineVar ?? 0.7, seed: 7, brushes });
+    showFinal(canvas.toDataURL("image/png"), `${strokes.toLocaleString("es-MX")} trazos a ${w} × ${h} px, con la tinta y el papel de tu estilo${brushes?.length ? `, dibujados con ${brushes.length} trazos de tu mano` : ""}.`);
   } catch (e) { toast("No se pudo hacer el render de trazos. Intenta con menos objetos o en una computadora."); console.error(e); }
   ui.finalBusy = null; renderPanel();
 }
@@ -1118,7 +1294,8 @@ async function finalAI() {
   try {
     const [w, h] = finalSize(1280);
     const { canvas } = await withExportScene(() => renderToBlob(renderer, composer, scene, exportCamera(), store.v.view, w, h, {}, [grid, ruler]));
-    const src = await aiFinish(canvas, refImage(), ai);
+    const sheets = store.v.objects.filter(o => o.kind === "figure" && o.sheets?.length).map(o => ({ name: o.name, urls: o.sheets }));
+    const src = await aiFinish(canvas, refImage(), ai, "", sheets);
     showFinal(src, refImage() ? "Acabado con IA usando tu página de referencia. Si no te convence, vuelve a intentarlo: cada intento sale distinto." : "Acabado con IA sin referencia. Elige una página tuya para que copie tu estilo.");
   } catch (e) { toast(e.message || "Gemini no pudo hacer el acabado."); }
   ui.finalBusy = null; renderPanel();
@@ -1150,7 +1327,7 @@ function savedStyles() { try { return JSON.parse(localStorage.getItem("arnes-sty
 function writeStyles(a) { try { localStorage.setItem("arnes-styles", JSON.stringify(a)); } catch { toast("Este navegador no permite guardar estilos aquí."); } syncProfile(); }
 function savedChars() { try { return JSON.parse(localStorage.getItem("arnes-chars") || "[]"); } catch { return []; } }
 function writeChars(a) { try { localStorage.setItem("arnes-chars", JSON.stringify(a)); } catch { toast("Este navegador no permite guardar personajes aquí."); } syncProfile(); }
-const CHAR_KEYS = ["params", "face", "clothes", "hair", "accessories", "color", "hands"];
+const CHAR_KEYS = ["params", "face", "clothes", "hair", "accessories", "color", "hands", "tex", "bodyType", "sheets"];
 
 function panelPose() {
   const o = selObj();
@@ -1233,7 +1410,8 @@ function panelPose() {
   h += `<div class="toggles">${toggle("relaxed", "Relajar límites articulares", "Para estilos caricaturescos", o.relaxed, "fig")}
     ${toggle("action", "Línea de acción", "Curva de cabeza a pie de apoyo", store.v.view.action)}
     ${toggle("com", "Centro de masa", "Avisa si la figura de pie pierde el equilibrio", store.v.view.com)}</div>`;
-  h += `<details class="more"><summary>Cuerpo</summary>${slider("height", "Altura", p.height, 140, 210, 1, " cm", "param")}${slider("heads", "Proporción", p.heads, 6, 8.5, 0.25, " cabezas", "param")}
+  h += `<h3>Tipo de cuerpo</h3><div class="pills">${Object.entries(BODY_TYPES).map(([k, b]) => pill(k, o.bodyType || "", b.label, "body-type")).join("")}</div>`;
+  h += `<details class="more"><summary>Cuerpo</summary>${slider("height", "Altura", p.height, 100, 210, 1, " cm", "param")}${slider("heads", "Proporción", p.heads, 5, 8.5, 0.1, " cabezas", "param")}
   ${slider("build", "Complexión", p.build, 0, 1, 0.05, "", "param")}${slider("shape", "Forma (masculina ↔ femenina)", p.shape, 0, 1, 0.05, "", "param")}
   <p class="sub">${p.height} cm · ${p.heads} cabezas · una cabeza mide ${round(p.height / p.heads, 1)} cm</p></details>`;
   return h;
@@ -1333,6 +1511,9 @@ function panelLuz() {
   <p class="sub">Tus estilos viajan con tu cuenta. Puedes tener varios y aplicarlos a cualquier viñeta.</p>`;
   const ai = aiConf(), ref = refImage();
   h += `<h3>Render final</h3><p class="sub">El render de trazos dibuja la viñeta con trazos sueltos de plumilla que siguen la forma, se afinan en las puntas y se cruzan en la sombra. Tarda unos segundos.</p>
+  ${(() => { const st = myStrokes(); return `<div class="card"><p class="sub"><strong>Tus trazos</strong> · ${st.length ? `${st.length} trazos tuyos guardados` : "todavía no hay"}. Sube una foto de una hoja con trazos sueltos (rayados, líneas, tus criaturas) y el render usará la forma de tu mano.</p>
+    ${st.length ? `<div class="strokestrip">${st.slice(0, 12).map(u => `<img src="${u}" alt="">`).join("")}</div><div class="toggles">${toggle("useMine", "Usar mis trazos", "En el render de trazos", ui.useMine !== false, "ui-t")}</div>` : ""}
+    <div class="row"><label class="btn filebtn">${ui.strokeBusy ? "Recortando trazos…" : "Subir hoja de trazos"}<input type="file" id="strokefile" accept="image/*" hidden></label>${st.length ? `<button class="btn danger" data-act="strokes-del">Borrar mis trazos</button>` : ""}</div></div>`; })()}
   <button class="btn wide" data-act="final-strokes" ${ui.finalBusy ? "disabled" : ""}>${ui.finalBusy === "strokes" ? "Dibujando trazos…" : "Render de trazos"}</button>
   <p class="sub">El acabado con IA redibuja la viñeta en tu estilo, con una página tuya de referencia y tu clave de Gemini. Conserva composición, poses y luz; cada imagen la paga tu cuenta y puede variar entre intentos.</p>
   <label class="btn wide filebtn">${ref ? "Cambiar página de referencia" : "Elegir página de referencia"}<input type="file" id="reffile" accept="image/*" hidden></label>
@@ -1481,6 +1662,14 @@ panel.addEventListener("click", e => {
     case "outfit": { o.clothes = OUTFITS[val].items.map(newGarment); ui.garment = o.clothes.at(-1).id; rebuildObject(o); store.commit(); renderPanel(); markDirty(3); toast("Vestido. Cambia la pose y la tela se acomoda sola al soltar."); break; }
     case "garment-add": { o.clothes ??= []; const g = newGarment(val); o.clothes.push(g); ui.garment = g.id; rebuildObject(o); store.commit(); renderPanel(); markDirty(3); break; }
     case "garment-sel": ui.garment = ui.garment === val ? null : val; renderPanel(); break;
+    case "body-type": {
+      const o = selObj(), bt = BODY_TYPES[val]; if (!o || !bt) break;
+      Object.assign(o.params, bt.params); o.bodyType = val;
+      if (bt.posture) { o.pose.rot ??= {}; for (const [j, r] of Object.entries(bt.posture)) o.pose.rot[j] = r.slice(); }
+      rebuildObject(o); groundFigure(figs.get(o.id)); o.pose = M.readPose(figs.get(o.id), o.pose); buildRuler(); store.commit(); renderPanel(); markDirty(3);
+      toast(`Cuerpo «${bt.label}». Ajusta altura, proporción y complexión en «Cuerpo».`); break;
+    }
+    case "garment-tex": { const g = o.clothes.find(x => x.id === ui.garment); if (!g) break; if (val === "lisa") delete g.tex; else g.tex = val; rebuildObject(o); store.commit(); renderPanel(); markDirty(3); break; }
     case "garment-mat": case "garment-collar": {
       const g = o.clothes.find(x => x.id === ui.garment); g[act === "garment-mat" ? "mat" : "collar"] = val;
       rebuildObject(o); store.commit(); renderPanel(); markDirty(3); break;
@@ -1537,8 +1726,13 @@ panel.addEventListener("click", e => {
       const list = savedStyles().filter(x => x.name !== name); list.push({ name, view }); writeStyles(list); renderPanel(); toast(`Se guardó «${name}» en tus estilos.`); break;
     }
     case "style-del": { const list = savedStyles(); const [st] = list.splice(+val, 1); writeStyles(list); renderPanel(); if (st) toast(`Se borró «${st.name}».`); break; }
-    case "fig-skin": { const o = selObj(); if (!o) break; if (val === "piel") { o.tex = "piel"; if (!o.color || !SKIN_TONES[o.color]) o.color = "#c99a76"; } else { delete o.tex; } paint(world.get(o.id), o.color || null, !["clay", "grabado"].includes(v.view.mode) || o.tex === "piel", o.tex); store.commit(); renderPanel(); markDirty(); break; }
-    case "fig-tone": { const o = selObj(); if (!o) break; o.color = val; paint(world.get(o.id), val, true, o.tex); store.commit(); renderPanel(); markDirty(); break; }
+    case "fig-skin": { const o = selObj(); if (!o) break; if (val === "piel") { o.tex = "piel"; if (!o.color || !SKIN_TONES[o.color]) o.color = "#c99a76"; } else { delete o.tex; } rebuildObject(o); store.commit(); renderPanel(); markDirty(3); break; }
+    case "fig-tone": { const o = selObj(); if (!o) break; o.color = val; rebuildObject(o); store.commit(); renderPanel(); markDirty(3); break; }
+    case "strokes-del": writeStrokes([]); renderPanel(); toast("Se borraron tus trazos."); break;
+    case "sheet-del": { const o = selObj(); if (o?.sheets) { o.sheets.splice(+val, 1); store.commit(); renderPanel(); } break; }
+    case "vin-read": { ui.readBusy = true; renderPanel(); readVineta(store.v).then(() => toast("Listo: revisa lo que entendió y arma la escena.")).catch(e => toast(e.message)).finally(() => { ui.readBusy = false; renderPanel(); }); break; }
+    case "vin-build": { const sc = store.v.read?.scene; if (sc) { buildScene(clone(sc)); toast("Escena armada desde tu dibujo. Ajusta lo que haga falta."); } break; }
+    case "read-drop": { const sc = store.v.read?.scene; if (sc) { sc.personajes.splice(+val, 1); store.commit(); renderPanel(); } break; }
     case "final-strokes": finalStrokes(); break;
     case "final-ai": finalAI(); break;
     case "ai-forget": writeAi({ model: aiConf().model }); renderPanel(); toast("Se quitó la clave de este dispositivo."); break;
@@ -1587,6 +1781,11 @@ panel.addEventListener("change", e => {
   const el = e.target, act = el.dataset.act, key = el.dataset.key;
   if (el.id === "glbfile") { importGlb(el.files[0]); el.value = ""; return; }
   if (el.id === "calfile") { const f = el.files[0]; el.value = ""; if (f) calibrate(f); return; }
+  if (el.dataset.act === "ui-t") { ui[el.dataset.key] = el.checked; return; }
+  if (el.id === "strokefile") { const f = el.files[0]; el.value = ""; if (f) { ui.strokeBusy = true; renderPanel(); extractStrokes(f).then(a => { if (!a.length) toast("No encontré trazos sueltos. Prueba con trazos separados entre sí, en tinta oscura sobre papel claro."); else { writeStrokes([...a, ...myStrokes()].slice(0, 96)); toast(`Se guardaron ${a.length} trazos tuyos.`); } }).catch(() => toast("No se pudo leer esa foto.")).finally(() => { ui.strokeBusy = false; renderPanel(); }); } return; }
+  if (el.id === "sheetfile") { const o = selObj(); const fs = [...el.files].slice(0, 3); el.value = ""; if (o && fs.length) Promise.all(fs.map(f => cropToDataUrl(f, [[0, 0], [1, 0], [1, 1], [0, 1]], 640))).then(us => { o.sheets = [...(o.sheets || []), ...us].slice(-3); store.commit(); renderPanel(); toast("Hoja de modelo guardada en este personaje."); }); return; }
+  if (el.id === "vinfile") { const f = el.files[0]; el.value = ""; if (f) cropToDataUrl(f, [[0, 0], [1, 0], [1, 1], [0, 1]]).then(u => { store.v.ref = u; delete store.v.read?.scene; store.commit(); renderPanel(); toast("Dibujo de la viñeta listo."); }); return; }
+  if (["read-pose", "read-body", "read-expr"].includes(el.dataset.act)) { const p = store.v.read?.scene?.personajes[+el.dataset.key]; if (p) { p[{ "read-pose": "pose", "read-body": "cuerpo", "read-expr": "expresion" }[el.dataset.act]] = el.value; store.commit(); } return; }
   if (el.id === "pagefile") { const f = el.files[0]; el.value = ""; if (f) pageFromPhoto(f); return; }
   if (el.id === "reffile") { const f = el.files[0]; el.value = ""; if (f) setRefImage(f); return; }
   if (el.dataset.act === "ai-key" || el.dataset.act === "ai-model" || el.dataset.act === "ai-imodel") { const a = aiConf(); a[{ "ai-key": "key", "ai-model": "model", "ai-imodel": "imageModel" }[el.dataset.act]] = el.value.trim(); writeAi(a); renderPanel(); toast(el.dataset.act === "ai-key" ? "Clave guardada solo en este dispositivo." : "Modelo guardado."); return; }
@@ -1677,7 +1876,7 @@ let profTimer = 0;
 function syncProfile() {
   if (!cloud.user()) return;
   clearTimeout(profTimer);
-  profTimer = setTimeout(() => cloud.pushProfile({ expr: savedExpr(), poses: savedPoses(), chars: savedChars(), styles: savedStyles() }).catch(() => {}), 1500);
+  profTimer = setTimeout(() => cloud.pushProfile({ expr: savedExpr(), poses: savedPoses(), chars: savedChars(), styles: savedStyles(), strokes: myStrokes() }).catch(() => {}), 1500);
 }
 async function mergeProfile() {
   if (!cloud.user()) return;
@@ -1688,7 +1887,8 @@ async function mergeProfile() {
     localStorage.setItem("arnes-poses", JSON.stringify(union(savedPoses(), d.poses)));
     localStorage.setItem("arnes-chars", JSON.stringify(union(savedChars(), d.chars)));
     localStorage.setItem("arnes-styles", JSON.stringify(union(savedStyles(), d.styles)));
-    await cloud.pushProfile({ expr: savedExpr(), poses: savedPoses(), chars: savedChars(), styles: savedStyles() });
+    if (Array.isArray(d.strokes) && !myStrokes().length) localStorage.setItem("arnes-strokes", JSON.stringify(d.strokes.slice(0, 96)));
+    await cloud.pushProfile({ expr: savedExpr(), poses: savedPoses(), chars: savedChars(), styles: savedStyles(), strokes: myStrokes() });
   } catch {}
 }
 function savePose(name, o) {

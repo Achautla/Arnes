@@ -44,7 +44,7 @@ const LAYERS = [ // umbral de tono, giro respecto al flujo, peso
   { t: 0.18, rot: 1.57, w: 1.05 },
 ];
 
-export async function drawStrokes(base, tone, { ink = "#2a1d12", spacing = 6, lineVar = 0.7, seed = 7, onProgress } = {}) {
+export async function drawStrokes(base, tone, { ink = "#2a1d12", spacing = 6, lineVar = 0.7, seed = 7, onProgress, brushes = null } = {}) {
   const f = toneField(tone);
   const out = document.createElement("canvas"); out.width = base.width; out.height = base.height;
   const g = out.getContext("2d");
@@ -97,6 +97,20 @@ export async function drawStrokes(base, tone, { ink = "#2a1d12", spacing = 6, li
           left.push([px - ty * wi / 2, py + tx * wi / 2]); right.push([px + ty * wi / 2, py - tx * wi / 2]);
         }
         g.globalAlpha = 0.78 + rand() * 0.22;
+        if (brushes?.length) {
+          // tu trazo: la máscara se estira por tramos a lo largo del camino
+          const br = brushes[(rand() * brushes.length) | 0], segs = pts.length - 1;
+          for (let i = 0; i < segs; i++) {
+            const a = pts[i], b = pts[i + 1], ax = a[0] * scale, ay = a[1] * scale, bx = b[0] * scale, by = b[1] * scale;
+            const sl = Math.hypot(bx - ax, by - ay); if (sl < 0.01) continue;
+            const sx = (i / segs) * br.width, sw = Math.max(1, br.width / segs);
+            g.save(); g.translate(ax, ay); g.rotate(Math.atan2(by - ay, bx - ax));
+            g.drawImage(br, sx, 0, sw, br.height, 0, -wmax * 1.2, sl + 0.6, wmax * 2.4);
+            g.restore();
+          }
+          if (++count % 4000 === 0) { onProgress?.((li + gy / f.h) / total); await new Promise(r => setTimeout(r, 0)); }
+          continue;
+        }
         g.beginPath(); g.moveTo(left[0][0], left[0][1]);
         for (let i = 1; i < left.length; i++) g.lineTo(left[i][0], left[i][1]);
         for (let i = right.length - 1; i >= 0; i--) g.lineTo(right[i][0], right[i][1]);
@@ -112,10 +126,11 @@ export async function drawStrokes(base, tone, { ink = "#2a1d12", spacing = 6, li
 
 // Acabado con IA: el render se manda junto con una referencia del artista a un modelo de imagen de Gemini
 export const AI_IMAGE_MODEL = "gemini-3.1-flash-image";
-export async function aiFinish(render, refDataUrl, { key, imageModel }, notes = "") {
+export async function aiFinish(render, refDataUrl, { key, imageModel }, notes = "", sheets = []) {
   const toB64 = c => { const k = Math.min(1, 1280 / Math.max(c.width, c.height)); const t = document.createElement("canvas"); t.width = Math.round(c.width * k); t.height = Math.round(c.height * k); t.getContext("2d").drawImage(c, 0, 0, t.width, t.height); return t.toDataURL("image/jpeg", 0.9).split(",")[1]; };
   const parts = [{ text: "Imagen 1: render 3D de una viñeta de cómic (composición, cámara, poses, luz y sombras ya decididas por el artista)." }, { inline_data: { mime_type: "image/jpeg", data: toB64(render) } }];
   if (refDataUrl) parts.push({ text: "Imagen 2: página dibujada por el mismo artista, referencia de su estilo." }, { inline_data: { mime_type: "image/jpeg", data: refDataUrl.split(",")[1] } });
+  for (const sh of sheets.slice(0, 4)) for (const u of sh.urls.slice(0, 2)) parts.push({ text: `Hoja de modelo del personaje «${sh.name}»: mantén su cara, peinado, complexión y ropa iguales.` }, { inline_data: { mime_type: "image/jpeg", data: u.split(",")[1] } });
   parts.push({ text: `Redibuja la imagen 1 como una viñeta terminada a mano${refDataUrl ? " con el estilo exacto de la imagen 2 (tipo de trazo, rayado, manejo de negros, textura del papel y paleta)" : ", con plumilla y tinta"}. Conserva exactamente la composición, el encuadre, la cantidad de personajes, sus poses, la dirección de la luz y las sombras. Convierte los maniquíes en personas con piel, rasgos y ropa coherentes con la escena. No agregues texto, globos, firmas ni marcos. ${notes}` });
   const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(imageModel || AI_IMAGE_MODEL)}:generateContent`, {
     method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key },
@@ -132,4 +147,65 @@ export async function aiFinish(render, refDataUrl, { key, imageModel }, notes = 
   const data = img && (img.inline_data || img.inlineData);
   if (!data) throw new Error("Gemini respondió sin imagen. Prueba otra vez o cambia la referencia.");
   return `data:${data.mime_type || data.mimeType || "image/png"};base64,${data.data}`;
+}
+
+// ------------------------------------------------------------------ biblioteca de tus trazos
+// De una foto con trazos sueltos (rayados, líneas, criaturas) se recortan los trazos alargados uno por uno,
+// se enderezan con su eje principal y se guardan como máscaras. El render de trazos los estira a lo largo
+// de cada trazo, así la textura, la presión y las puntas son las de tu mano.
+export async function extractStrokes(file, max = 48) {
+  const url = URL.createObjectURL(file);
+  let img;
+  try { img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; }); }
+  finally { URL.revokeObjectURL(url); }
+  const k = Math.min(1, 1600 / Math.max(img.width, img.height)), w = Math.round(img.width * k), h = Math.round(img.height * k);
+  const c = document.createElement("canvas"); c.width = w; c.height = h; const g = c.getContext("2d"); g.drawImage(img, 0, 0, w, h);
+  const d = g.getImageData(0, 0, w, h).data, n = w * h, L = new Float32Array(n);
+  for (let i = 0; i < n; i++) L[i] = (0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2]) / 255;
+  const srt = Float32Array.from(L).sort(), paper = srt[Math.floor(n * 0.8)], ink = srt[Math.floor(n * 0.02)];
+  const thr = (paper + ink) / 2, lab = new Int32Array(n), out = [];
+  const stack = [];
+  let id = 0;
+  for (let i0 = 0; i0 < n && out.length < max * 3; i0++) {
+    if (L[i0] >= thr || lab[i0]) continue;
+    id++; lab[i0] = id; stack.push(i0); const pix = [];
+    while (stack.length) {
+      const i = stack.pop(); pix.push(i); const x = i % w, y = (i / w) | 0;
+      for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1, x > 0 && y > 0 ? i - w - 1 : -1, x < w - 1 && y < h - 1 ? i + w + 1 : -1])
+        if (j >= 0 && !lab[j] && L[j] < thr) { lab[j] = id; stack.push(j); }
+      if (pix.length > 20000) break;
+    }
+    if (pix.length < 25 || pix.length > 20000) continue;
+    // eje principal (PCA): largo y ancho del trazo
+    let mx = 0, my = 0; for (const i of pix) { mx += i % w; my += (i / w) | 0; } mx /= pix.length; my /= pix.length;
+    let sxx = 0, syy = 0, sxy = 0; for (const i of pix) { const dx = i % w - mx, dy = ((i / w) | 0) - my; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; }
+    const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy), ca = Math.cos(ang), sa = Math.sin(ang);
+    let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+    for (const i of pix) { const dx = i % w - mx, dy = ((i / w) | 0) - my, u = dx * ca + dy * sa, v = -dx * sa + dy * ca; u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v); }
+    const len = u1 - u0, wid = v1 - v0 + 1;
+    if (len < 18 || len / wid < 4) continue; // solo trazos alargados
+    // máscara enderezada: 160 × 24 px, con la tinta como opacidad
+    const S = document.createElement("canvas"); S.width = 160; S.height = 24;
+    const sg = S.getContext("2d"), sd = sg.createImageData(160, 24);
+    for (let yy = 0; yy < 24; yy++) for (let xx = 0; xx < 160; xx++) {
+      const u = u0 + (xx / 159) * len, v = (yy / 23 - 0.5) * Math.max(wid * 1.4, 3);
+      const px = Math.round(mx + u * ca - v * sa), py = Math.round(my + u * sa + v * ca);
+      if (px < 0 || py < 0 || px >= w || py >= h) continue;
+      const a = Math.max(0, Math.min(1, (thr - L[py * w + px]) / Math.max(0.05, thr - ink)));
+      sd.data[(yy * 160 + xx) * 4 + 3] = Math.round(a * 255);
+    }
+    sg.putImageData(sd, 0, 0);
+    out.push({ url: S.toDataURL("image/png"), ratio: len / wid });
+  }
+  // los más alargados primero
+  return out.sort((a, b) => b.ratio - a.ratio).slice(0, max).map(o => o.url);
+}
+
+export async function loadBrushes(urls, ink) {
+  return Promise.all(urls.map(u => new Promise(res => {
+    const i = new Image(); i.onload = () => {
+      const c = document.createElement("canvas"); c.width = i.width; c.height = i.height; const g = c.getContext("2d");
+      g.drawImage(i, 0, 0); g.globalCompositeOperation = "source-in"; g.fillStyle = ink; g.fillRect(0, 0, c.width, c.height); res(c);
+    }; i.onerror = () => res(null); i.src = u;
+  }))).then(a => a.filter(Boolean));
 }

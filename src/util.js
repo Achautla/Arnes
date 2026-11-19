@@ -55,7 +55,7 @@ export function colorMat(hex) {
 // Texturas de superficie: dibujan detalle en el valor (vetas, juntas, hojas, grietas) para que cada
 // estilo lo interprete: el grabado lo convierte en rayado, el color dinámico en manchas planas.
 export const TEXTURES = { lisa: "Lisa", madera: "Madera", ladrillo: "Ladrillo", follaje: "Follaje", piedra: "Piedra", tejido: "Tela o tejido", metal: "Metal gastado" };
-const TEX_ID = { madera: 1, ladrillo: 2, follaje: 3, piedra: 4, tejido: 5, metal: 6, piel: 7 };
+const TEX_ID = { madera: 1, ladrillo: 2, follaje: 3, piedra: 4, tejido: 5, metal: 6, piel: 7, mezclilla: 8, lana: 9, cuero: 10, seda: 11 };
 export const SKIN_TONES = { "#f0d0b8": "Muy clara", "#e2b593": "Clara", "#c99a76": "Media", "#a6744f": "Morena", "#7a5038": "Oscura", "#563628": "Muy oscura" };
 const texGLSL = `
 varying vec3 vWPos; varying vec3 vWN; uniform int texKind; uniform float texScale;
@@ -96,6 +96,21 @@ float texPattern(){
     float sc = smoothstep(0.92, 1.0, tn(vec2(uv.x * 200.0, uv.y * 4.0)));
     return mix(0.75, 1.0, tf(uv * 5.0)) * (1.0 - sc * 0.35);
   }
+  if (texKind == 8) { // mezclilla: sarga diagonal con hilo claro
+    float tw = sin((uv.x + uv.y) * 420.0) * 0.5 + 0.5, sl = tn(vec2(uv.x * 30.0, uv.y * 600.0));
+    return mix(0.78, 1.0, tw) * mix(0.85, 1.0, sl) * mix(0.9, 1.0, tf(uv * 6.0));
+  }
+  if (texKind == 9) { // lana: punto en espiga
+    vec2 k = uv * vec2(110.0, 70.0); float v = abs(fract(k.x) - 0.5) * 2.0; float chev = abs(fract(k.y + v * 0.5) - 0.5) * 2.0;
+    return mix(0.75, 1.0, smoothstep(0.1, 0.6, chev)) * mix(0.88, 1.0, tn(uv * 220.0));
+  }
+  if (texKind == 10) { // cuero: grano fino y arrugas
+    float gr = tn(uv * 520.0), cr = smoothstep(0.48, 0.5, abs(tf(uv * 7.0) - 0.5) + 0.48);
+    return mix(0.88, 1.0, gr) * (1.0 - (1.0 - cr) * 0.25) * mix(0.82, 1.0, tf(uv * 3.0));
+  }
+  if (texKind == 11) { // seda: brillo suave en franjas largas
+    return mix(0.9, 1.05, sin(uv.y * 40.0 + tf(uv * 4.0) * 6.0) * 0.5 + 0.5);
+  }
   if (texKind == 7) { // piel: manchas suaves y poro fino, sin vetas de madera
     float mott = tf(uv * 9.0), pore = tn(uv * 380.0);
     return mix(0.92, 1.0, mott) * (1.0 - pore * 0.05);
@@ -103,18 +118,18 @@ float texPattern(){
   return 1.0;
 }`;
 const texCache = new Map();
-export function texturedMat(hex, kind) {
-  const key = (hex || "clay") + "|" + kind;
+export function texturedMat(hex, kind, side = THREE.FrontSide) {
+  const key = (hex || "clay") + "|" + kind + "|" + side;
   if (texCache.has(key)) return texCache.get(key);
   const m = kind === "piel"
-    ? new THREE.MeshPhysicalMaterial({ color: new THREE.Color(hex || 0xc99a76), roughness: 0.55, metalness: 0, sheen: 0.35, sheenRoughness: 0.6, sheenColor: new THREE.Color(0xff9a80), clearcoat: 0.06, clearcoatRoughness: 0.6 })
-    : new THREE.MeshStandardMaterial({ color: new THREE.Color(hex || 0xbdb6ac), roughness: kind === "metal" ? 0.5 : 0.86, metalness: kind === "metal" ? 0.25 : 0 });
+    ? new THREE.MeshPhysicalMaterial({ side, color: new THREE.Color(hex || 0xc99a76), roughness: 0.55, metalness: 0, sheen: 0.35, sheenRoughness: 0.6, sheenColor: new THREE.Color(0xff9a80), clearcoat: 0.06, clearcoatRoughness: 0.6 })
+    : new THREE.MeshStandardMaterial({ side, color: new THREE.Color(hex || 0xbdb6ac), roughness: kind === "metal" ? 0.5 : kind === "cuero" ? 0.55 : kind === "seda" ? 0.45 : 0.86, metalness: kind === "metal" ? 0.25 : 0 });
   m.onBeforeCompile = sh => {
     sh.uniforms.texKind = { value: TEX_ID[kind] || 0 }; sh.uniforms.texScale = { value: 1 };
     sh.vertexShader = "varying vec3 vWPos; varying vec3 vWN;\n" + sh.vertexShader.replace("#include <worldpos_vertex>", "#include <worldpos_vertex>\n vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz; vWN = mat3(modelMatrix) * objectNormal;");
     sh.fragmentShader = texGLSL + "\n" + sh.fragmentShader.replace("#include <color_fragment>", "#include <color_fragment>\n diffuseColor.rgb *= texPattern();");
   };
-  m.customProgramCacheKey = () => "tex-" + kind;
+  m.customProgramCacheKey = () => "tex-" + kind + side;
   texCache.set(key, m); return m;
 }
 // Pinta un objeto con su color y su textura (o lo regresa a arcilla). Solo toca las piezas de arcilla

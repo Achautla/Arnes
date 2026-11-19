@@ -99,8 +99,9 @@ export function sceneFor(v, { lowEnd = true, mode } = {}) {
   for (const o of v.objects) {
     const fig = figs.get(o.id);
     const hair = o.hair && o.hair.style && o.hair.style !== "ninguno";
-    if (fig && (o.clothes?.length || hair)) {
-      fig.dress = dress(fig, o.clothes || [], { obstacles: () => gatherObstacles([...world.values()], [...figs.values()], fig.root), hair: o.hair, quality: lowEnd ? "media" : (view.clothQ || "alta"), useColor, map: !!view.tension, wind: view.wind || 0, windDir: view.windDir || 0 });
+    const clothes = [...(o.tex === "piel" ? [{ id: "piel", type: "piel", color: o.color || "#c99a76", mat: "piel", ease: 0.15 }] : []), ...(o.clothes || [])];
+    if (fig && (clothes.length || hair)) {
+      fig.dress = dress(fig, clothes, { obstacles: () => gatherObstacles([...world.values()], [...figs.values()], fig.root), hair: o.hair, quality: lowEnd ? "media" : (view.clothQ || "alta"), useColor, map: !!view.tension, wind: view.wind || 0, windDir: view.windDir || 0 });
     }
     if (fig && o.accessories?.length) fig.acc = equip(fig, o.accessories, { useColor });
     if (fig) fig.root.traverse(c => { c.userData.objId = o.id; });

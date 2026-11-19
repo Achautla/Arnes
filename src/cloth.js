@@ -6,13 +6,17 @@
 // - Los pliegues salen de la compresión de la tela: donde se encoge, se forman crestas.
 import * as THREE from "three";
 import { readJoint } from "./mannequin.js";
-import { pushOut, toLocal } from "./contact.js";
+import { pushOut, toLocal, bulge } from "./contact.js";
+import { texturedMat } from "./util.js";
 
 export const MATERIALS = {
   rigido: { label: "Rígida (lana, mezclilla)", lambda: 0.075, amp: 0.02, bend: 0.55, folds: 6, gain: 5.0 },
   medio: { label: "Media (algodón)", lambda: 0.05, amp: 0.015, bend: 0.25, folds: 9, gain: 5.5 },
   suelto: { label: "Suelta (seda, gasa)", lambda: 0.032, amp: 0.011, bend: 0.06, folds: 13, gain: 6.0 },
+  piel: { label: "Piel", hidden: true, lambda: 0.06, amp: 0.0025, bend: 0.9, folds: 3, gain: 1.2 },
 };
+// Texturas de tela: se dibujan en el valor, como las de los objetos
+export const CLOTH_TEX = { lisa: "Lisa", tejido: "Algodón", mezclilla: "Mezclilla", lana: "Lana", cuero: "Cuero", seda: "Seda" };
 
 // largo: 0..1 (faldas y capas: de la cadera al tobillo) · manga: 0 sin manga, 0.3 corta, 1 larga
 export const GARMENTS = {
@@ -23,6 +27,8 @@ export const GARMENTS = {
   vestido: { label: "Vestido", layer: 1, color: "#6d3038", mat: "suelto", sleeve: 0.3, length: 0.55 },
   falda: { label: "Falda", layer: 2, color: "#3f4a5c", mat: "medio", length: 0.5 },
   capa: { label: "Capa", layer: 5, color: "#2b2a2f", mat: "suelto", length: 0.8, collar: "bajo" },
+  // cuerpo continuo: una "piel" ceñida de una sola pieza sobre el maniquí (tronco, brazos y piernas)
+  piel: { label: "Piel", layer: 0, color: "#c99a76", mat: "piel", hidden: true },
 };
 export const FOLD_TYPES = {
   tubo: "Tubo", zigzag: "Zigzag", espiral: "Espiral", medio: "Medio cierre", caida: "Caída", inerte: "Inerte",
@@ -40,7 +46,8 @@ export const Q = { baja: { step: 0.026, around: 18, steps: 45, iters: 5 }, media
 
 // ------------------------------------------------------------------ materiales
 const matCache = new Map();
-function clothMat(hex, useColor, map) {
+function clothMat(hex, useColor, map, tex) {
+  if (tex && tex !== "lisa" && !map) return texturedMat(tex === "piel" ? hex : useColor ? hex : null, tex, THREE.DoubleSide);
   const key = (map ? "map" : useColor ? hex : "clay");
   if (!matCache.has(key)) {
     matCache.set(key, map
@@ -236,6 +243,7 @@ function sheetPart(R, opts) {
 }
 
 // ------------------------------------------------------------------ armar prendas
+const gtex = g => g.type === "piel" ? "piel" : g.tex;
 function buildGarment(fig, R, g, Qs) {
   const d = fig.d, H = d.H, t = d.t, P = R.pos, M = MATERIALS[g.mat] || MATERIALS.medio;
   const def = GARMENTS[g.type];
@@ -377,6 +385,14 @@ function buildGarment(fig, R, g, Qs) {
       parts.push(pel);
       parts.push(leg("L", g.length ?? 1), leg("R", g.length ?? 1)); break;
     }
+    case "piel": {
+      parts.push(torso(d.hipJY - 0.006 * H, d.neckY + 0.012 * H));
+      parts.push(sleeve("L", 1), sleeve("R", 1));
+      const yb = d.hipJY - 0.014 * H, pel = torso(yb, d.hipJY + 0.02 * H); pel.name = "cadera";
+      for (let i = 0; i < pel.rows * pel.cols; i++) { const k = 1 - Math.min(1, (pel.rest[i * 3 + 1] - yb) / (0.05 * H)); if (k > 0) { pel.rest[i * 3 + 2] *= 1 - 0.28 * k; pel.rest[i * 3] *= 1 - 0.08 * k; } }
+      parts.push(pel, leg("L", 1), leg("R", 1));
+      break;
+    }
     case "capa": parts.push(cape(g.length ?? 0.8)); if (g.collar !== "no") parts.push(collar(g.collar === "alzado", true)); break;
   }
   // ---- a medida: abierta, solapas, botones, puños y bastillas
@@ -498,7 +514,7 @@ export function dress(fig, clothes, opts = {}) {
   const bindInv = R.bind, R0 = R.pos;
   let useColor = !!opts.useColor, showMap = !!opts.map, wind = opts.wind || 0, windDir = opts.windDir || 0;
   for (const { g, parts } of garments) for (const p of parts) {
-    const m = new THREE.Mesh(p.geo, clothMat(p.dark ? shade(g.color) : g.color, useColor, showMap));
+    const m = new THREE.Mesh(p.geo, clothMat(p.dark ? shade(g.color) : g.color, useColor, showMap, gtex(g)));
     m.castShadow = m.receiveShadow = true; m.userData.cloth = true; m.userData.garment = g.id;
     m.userData.jointAt = i => p.wj[i] || "hips";
     m.frustumCulled = false;
@@ -823,7 +839,20 @@ export function dress(fig, clothes, opts = {}) {
         else {
           skinTo(p, p.pos);
           // la ropa ceñida también se aplana contra muebles, el piso y otros cuerpos (el pantalón en el asiento)
-          if (obsL) { const P = p.pos; for (let i = 0; i < P.length; i += 3) { _q.set(P[i], P[i + 1], P[i + 2]); if (pushOut(_q, obsL, floorY, 0.003)) { P[i] = _q.x; P[i + 1] = _q.y; P[i + 2] = _q.z; } } }
+          if (obsL) {
+            const P = p.pos, hits = [];
+            for (let i = 0; i < P.length; i += 3) {
+              const x0 = P[i], y0 = P[i + 1], z0 = P[i + 2];
+              _q.set(x0, y0, z0);
+              if (pushOut(_q, obsL, floorY, 0.003)) {
+                P[i] = _q.x; P[i + 1] = _q.y; P[i + 2] = _q.z;
+                const dx = _q.x - x0, dy = _q.y - y0, dz = _q.z - z0, d = Math.hypot(dx, dy, dz) || 1;
+                hits.push({ i, x: _q.x, y: _q.y, z: _q.z, depth: d, dir: [dx / d, dy / d, dz / d] });
+              }
+            }
+            // la piel abulta más que la tela; la tela rígida casi nada
+            if (hits.length) bulge(P, hits, 0.04, g.type === "piel" ? 0.6 : M.bend > 0.5 ? 0.15 : 0.3);
+          }
         }
         const twist = p.name.startsWith("manga") ? Math.sign(readJoint(fig, "elbow_" + p.name.slice(-1))[1]) * Math.min(3, Math.abs(readJoint(fig, "elbow_" + p.name.slice(-1))[1]) / 25) : 0;
         foldsOn(p, M, twist);
@@ -845,7 +874,7 @@ export function dress(fig, clothes, opts = {}) {
   function setStyle({ color, map } = {}) {
     if (color !== undefined) useColor = color;
     if (map !== undefined) showMap = map;
-    for (const { g, parts } of garments) for (const p of parts) p.mesh.material = clothMat(p.dark ? shade(g.color) : g.color, useColor, showMap);
+    for (const { g, parts } of garments) for (const p of parts) p.mesh.material = clothMat(p.dark ? shade(g.color) : g.color, useColor, showMap, gtex(g));
     for (const r of rigids) r.mesh.material = clothMat(r.mesh.userData.dark ? shade(r.g.color) : r.g.color, useColor, false);
     if (showMap) for (const { parts } of garments) for (const p of parts) colorMap(p, baseCol);
   }

@@ -2,6 +2,16 @@
 
 Storyboard 3D para cómic: posar personajes, colocar cámaras y luces, y obtener un semirender (volumen, sombras y valores) para dibujar a lápiz.
 
+## Fase 5 · entregas 2 a 9 (18-nov)
+
+- **Viñeta a escena** (Escena → «Desde tu dibujo»): Gemini lee el dibujo de la viñeta y devuelve plano, ángulo, lente, escenario, luz, efecto, personajes (pose, cuerpo, piel, ropa, expresión, giro, posición) y objetos del catálogo. Pantalla de revisión; luego se arma la escena.
+- **Pose fina desde el dibujo:** los puntos del esqueleto que marca Gemini llevan muñecas y tobillos a su lugar con cinemática inversa; se descarta un brazo si queda detrás de la espalda.
+- **Cuerpo continuo con piel:** una piel ceñida de una sola pieza (tronco, brazos y piernas) sobre el esqueleto, con seis tonos. **Tipos de cuerpo:** niño, joven, adulto, mujer, persona mayor (con postura) y heroico.
+- **Ropa con textura:** algodón, mezclilla, lana, cuero y seda.
+- **Contacto con volumen:** la piel y la tela abultan alrededor de donde se aplastan.
+- **Tus trazos:** de una foto con trazos sueltos se recortan los trazos uno por uno y el render de trazos los usa.
+- **Hojas de modelo por personaje:** se mandan al acabado con IA para mantener al personaje igual en todas las viñetas.
+
 ## Fase 5 · entrega 1 y cierre de pendientes de la Fase 4 (18-nov)
 
 - **Página desde una foto** (pestaña Página): encuentra las viñetas aunque estén inclinadas (inunda el papel desde la orilla y lo encerrado son las viñetas), las ordena para lectura occidental o manga, elige el formato de papel y crea una viñeta vacía por recuadro con su proporción. Con clave de Gemini corrige los casos difíciles y describe cada viñeta.

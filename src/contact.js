@@ -60,6 +60,27 @@ export function pushOut(p, obs, floorY = -Infinity, margin = 0.004) {
   return moved;
 }
 
+// Abultamiento: la carne (o la tela) que se aplasta contra algo sube alrededor del contacto, como un
+// borde blando. P es la lista plana de posiciones; hits, los vértices empujados con cuánto y hacia dónde.
+export function bulge(P, hits, radius = 0.035, k = 0.55) {
+  if (!hits.length) return;
+  const step = Math.max(1, Math.floor(hits.length / 64)), H = [];
+  for (let h = 0; h < hits.length; h += step) H.push(hits[h]);
+  const hitSet = new Set(hits.map(h => h.i));
+  const r2 = radius * radius;
+  for (let i = 0; i < P.length; i += 3) {
+    if (hitSet.has(i)) continue;
+    let dx = 0, dy = 0, dz = 0, wsum = 0;
+    for (const h of H) {
+      const ex = P[i] - h.x, ey = P[i + 1] - h.y, ez = P[i + 2] - h.z, d2 = ex * ex + ey * ey + ez * ez;
+      if (d2 > r2) continue;
+      const f = 1 - Math.sqrt(d2) / radius, w = f * f * (3 - 2 * f) * h.depth;
+      dx += h.dir[0] * w; dy += h.dir[1] * w; dz += h.dir[2] * w; wsum += f;
+    }
+    if (wsum) { const s2 = k / Math.max(1, wsum * 0.35); P[i] += dx * s2; P[i + 1] += dy * s2; P[i + 2] += dz * s2; }
+  }
+}
+
 // Piel: los vértices que se meten en un mueble, el piso u otro cuerpo se aplanan contra la superficie,
 // y la carne desplazada se reparte un poco hacia los lados (abultamiento).
 export function deformSkin(fig, obs, floorY = 0) {
@@ -76,12 +97,19 @@ export function deformSkin(fig, obs, floorY = 0) {
     if (!near) { if (m.userData.deformed) { arr.set(rest); pos.needsUpdate = true; m.geometry.computeVertexNormals(); m.userData.deformed = false; } return; }
     const inv = m.matrixWorld.clone().invert();
     let any = false;
+    const W = new Float32Array(arr.length), hits = [];
     for (let i = 0; i < arr.length; i += 3) {
       _v.set(rest[i], rest[i + 1], rest[i + 2]).applyMatrix4(m.matrixWorld);
       const before = _v.clone();
-      if (pushOut(_v, obs, floorY, 0.001)) { any = true; n++; const d = before.distanceTo(_v); _v.applyMatrix4(inv); arr[i] = _v.x; arr[i + 1] = _v.y; arr[i + 2] = _v.z; void d; }
-      else { arr[i] = rest[i]; arr[i + 1] = rest[i + 1]; arr[i + 2] = rest[i + 2]; }
+      if (pushOut(_v, obs, floorY, 0.001)) {
+        any = true; n++;
+        const d = before.distanceTo(_v), dir = _v.clone().sub(before).divideScalar(d || 1);
+        hits.push({ i, x: _v.x, y: _v.y, z: _v.z, depth: d, dir: [dir.x, dir.y, dir.z] });
+      }
+      W[i] = _v.x; W[i + 1] = _v.y; W[i + 2] = _v.z;
     }
+    if (any) bulge(W, hits);
+    for (let i = 0; i < arr.length; i += 3) { _v.set(W[i], W[i + 1], W[i + 2]).applyMatrix4(inv); arr[i] = _v.x; arr[i + 1] = _v.y; arr[i + 2] = _v.z; }
     if (any || m.userData.deformed) { pos.needsUpdate = true; m.geometry.computeVertexNormals(); m.geometry.computeBoundingSphere(); }
     m.userData.deformed = any;
   });

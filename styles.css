@@ -278,3 +278,9 @@ body.drilling #tbar, body.drilling .hud { display: none !important; }
 #final img { max-width: 100%; max-height: 70vh; display: block; }
 .refthumb { width: 100%; max-height: 140px; object-fit: contain; border-radius: 8px; background: #111; margin-top: 6px; }
 .pill .sw { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; border: 1px solid rgba(255,255,255,0.25); }
+.readp { border-top: 1px solid var(--line, #33373b); padding-top: 8px; margin-top: 8px; display: grid; gap: 6px; }
+.strokestrip { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+.strokestrip img { height: 14px; width: 70px; object-fit: fill; background: #e9e2d3; border-radius: 3px; }
+.strokestrip.sheets img { height: 72px; width: auto; }
+.sheetb { position: relative; padding: 0; border: 0; background: none; cursor: pointer; }
+.sheetb span { position: absolute; top: 2px; right: 4px; color: #fff; text-shadow: 0 0 3px #000; font-weight: 700; }
