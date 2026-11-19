@@ -5,7 +5,8 @@ const vert = `varying vec2 vUv0; void main(){ vUv0 = uv; gl_Position = vec4(posi
 const frag = `
 precision highp float;
 varying vec2 vUv0;
-vec2 vUv;
+vec2 vUv; vec2 gUv; vec2 fres;
+uniform vec4 tile;
 uniform sampler2D tColor, tDepth, tNormal, tLit, tNdl;
 uniform mat3 camRot;
 uniform vec2 res;
@@ -55,18 +56,18 @@ float quant(float l){
   if (tones == 3) return l < th.x ? 0.0 : (l < th.y ? 0.5 : 1.0);
   return l < th.x ? 0.0 : l < th.y ? 0.25 : l < th.z ? 0.5 : l < th.w ? 0.75 : 1.0;
 }
-vec2 barrel(vec2 uv){ vec2 c = uv - 0.5; float a = res.x / res.y; c.x *= a; float k = fisheye * 2.4; float rm = 0.25 * (a * a + 1.0); c *= (1.0 + k * dot(c, c)) / (1.0 + k * rm); c.x /= a; return c + 0.5; }
+vec2 barrel(vec2 uv){ vec2 c = uv - 0.5; float a = fres.x / fres.y; c.x *= a; float k = fisheye * 2.4; float rm = 0.25 * (a * a + 1.0); c *= (1.0 + k * dot(c, c)) / (1.0 + k * rm); c.x /= a; return c + 0.5; }
 // Efectos de viñeta encima del render: velocidad, enfoque e impacto
 vec3 applyFx(vec3 col, float bg){
   if (fxType == 0 || fxAmt <= 0.0) return col;
-  vec2 px = vUv * res;
-  vec2 q = (vUv - focus) * vec2(res.x / res.y, 1.0);
+  vec2 px = gUv * fres;
+  vec2 q = (gUv - focus) * vec2(fres.x / fres.y, 1.0);
   float rad = length(q);
   if (fxType == 1) {
     vec2 dir = vec2(cos(fxAng), sin(fxAng));
     float across = dot(px, vec2(-dir.y, dir.x)), along = dot(px, dir);
     float id = floor(across / 3.0), h = hash(vec2(id, 7.0));
-    float seg = fract(along / (res.y * (0.25 + h * 0.5)) + h * 5.0);
+    float seg = fract(along / (fres.y * (0.25 + h * 0.5)) + h * 5.0);
     float on = step(1.0 - fxAmt * 0.45, h) * step(seg, 0.55) * smoothstep(0.08, 0.45, rad);
     float w = 1.0 - smoothstep(0.35, 1.1, abs(fract(across / 3.0) - 0.5) * 3.0 / (0.6 + h));
     return mix(col, fxInk, on * w * 0.9 * mix(0.3, 1.0, bg));
@@ -96,7 +97,8 @@ vec3 applyFx(vec3 col, float bg){
   return mix(inv, vec3(1.0) - inv, on * 0.85);
 }
 void main(){
-  vUv = fisheye > 0.0 ? barrel(vUv0) : vUv0;
+  fres = tile.zw; gUv = (vUv0 * res + tile.xy) / fres;
+  vUv = fisheye > 0.0 ? (barrel(gUv) * fres - tile.xy) / res : vUv0;
   vec3 col = toSRGB(texture2D(tColor, vUv).rgb);
   float d = texture2D(tDepth, vUv).x;
   float lum = dot(col, vec3(0.299, 0.587, 0.114));
@@ -104,7 +106,7 @@ void main(){
   if (mode == 1) { v = quant(lum); col = vec3(v); }
   else if (mode == 2) { v = lum < th.x ? 0.0 : 1.0; col = vec3(v); }
   else if (mode == 3) {
-    vec2 px = vUv * res;
+    vec2 px = gUv * fres;
     vec2 r = vec2(px.x + px.y, px.x - px.y) * 0.70710678;
     vec2 c = mod(r, dotSize) - 0.5 * dotSize;
     float lo = th.x * 0.55, hi = min(0.95, th.x + 0.35);
@@ -136,7 +138,7 @@ void main(){
     col = clamp(chroma * q, 0.0, 1.0); v = q;
   }
   if (mode == 6 || mode == 7 || mode == 8) {
-    vec2 px = vUv * res;
+    vec2 px = gUv * fres;
     vec3 n = texture2D(tNormal, vUv).xyz * 2.0 - 1.0;
     bool sky = d >= 0.99999;
     float L = clamp(pow(lum, 0.62) + (0.33 - th.x) * 1.2, 0.0, 1.0);
@@ -158,7 +160,7 @@ void main(){
     if (mode == 6) {
       // Grabado sepia: papel envejecido, plumilla con rayado cruzado y negros sólidos
       float g = vnoise(px * 0.9) * 0.5 + vnoise(px * 0.08) * 0.5;
-      float vig = smoothstep(1.25, 0.35, length((vUv - 0.5) * vec2(1.0, 1.15)) * 1.6);
+      float vig = smoothstep(1.25, 0.35, length((gUv - 0.5) * vec2(1.0, 1.15)) * 1.6);
       vec3 pp = paper; float pl = dot(pp, vec3(0.299, 0.587, 0.114)); if (pl < 0.6) pp = mix(pp, vec3(1.0), (0.6 - pl) / max(1.0 - pl, 0.01) + 0.1);
       vec3 pap = pp * (1.0 - grain * 0.16 * g) * mix(0.72, 1.0, vig);
       float s = hatch;
@@ -207,7 +209,7 @@ void main(){
       float rim = smoothstep(0.42, 0.12, abs(n.z)) * step(spot, L);
       c = mix(c, vec3(1.0, 0.86, 0.62), rim * 0.55);
       if (sky && burst) {
-        vec2 q = (vUv - focus) * vec2(res.x / res.y, 1.0);
+        vec2 q = (gUv - focus) * vec2(fres.x / fres.y, 1.0);
         float ang = atan(q.y, q.x), rad = length(q);
         float k = ang * 9.549;
         float ray = step(0.45 + 0.25 * hash(vec2(floor(k), 1.0)), fract(k + vnoise(vec2(rad * 3.0, floor(k))) * 0.3));
@@ -287,7 +289,7 @@ export class Composer {
       vertexShader: vert, fragmentShader: frag, depthTest: false, depthWrite: false, transparent: false, blending: THREE.NoBlending,
       uniforms: {
         tColor: { value: null }, tDepth: { value: null }, tNormal: { value: null }, tLit: { value: null }, tNdl: { value: null }, camRot: { value: new THREE.Matrix3() },
-        res: { value: new THREE.Vector2(1, 1) }, near: { value: 0.05 }, far: { value: 200 },
+        res: { value: new THREE.Vector2(1, 1) }, tile: { value: new THREE.Vector4(0, 0, 1, 1) }, near: { value: 0.05 }, far: { value: 200 },
         thick: { value: 1.5 }, mode: { value: 0 }, dotSize: { value: 7 }, tones: { value: 3 }, th: { value: new THREE.Vector4(0.2, 0.45, 0.65, 0.85) },
         outline: { value: false }, contourOnly: { value: false }, blue: { value: false }, clearBg: { value: false }, useNormal: { value: true },
         ink: { value: new THREE.Color(0.11, 0.11, 0.12) }, blueInk: { value: new THREE.Color(0.25, 0.55, 0.85) },
@@ -331,6 +333,7 @@ export class Composer {
     const u = this.mat.uniforms;
     u.tColor.value = rt.texture; u.tDepth.value = rt.depthTexture; u.tNormal.value = nrt.texture;
     u.res.value.set(rt.width, rt.height);
+    if (opts.tile) u.tile.value.fromArray(opts.tile); else u.tile.value.set(0, 0, rt.width, rt.height);
     u.near.value = camera.near; u.far.value = camera.far;
     u.mode.value = MODE_INDEX[view.mode] ?? 0;
     u.tones.value = view.tones || 3;
@@ -398,19 +401,58 @@ export function thresholds(view) {
 }
 
 // Render a una imagen (Blob PNG) con la cámara dada
+// La misma curva del shader (barrel), aplicada en la CPU a una imagen completa
+function barrelCanvas(c, fisheye) {
+  const w = c.width, h = c.height, g = c.getContext("2d");
+  const src = g.getImageData(0, 0, w, h), dst = g.createImageData(w, h), S = src.data, D = dst.data;
+  const a = w / h, k = fisheye * 2.4, rm = 0.25 * (a * a + 1);
+  for (let y = 0; y < h; y++) {
+    const v = 1 - (y + 0.5) / h; // como el uv del shader: de abajo hacia arriba
+    for (let x = 0; x < w; x++) {
+      let cx = ((x + 0.5) / w - 0.5) * a, cy = v - 0.5;
+      const f = (1 + k * (cx * cx + cy * cy)) / (1 + k * rm);
+      const sx = Math.min(w - 1, Math.max(0, Math.round((cx * f / a + 0.5) * w - 0.5)));
+      const sy = Math.min(h - 1, Math.max(0, Math.round((1 - (cy * f + 0.5)) * h - 0.5)));
+      const si = (sy * w + sx) * 4, di = (y * w + x) * 4;
+      D[di] = S[si]; D[di + 1] = S[si + 1]; D[di + 2] = S[si + 2]; D[di + 3] = S[si + 3];
+    }
+  }
+  g.putImageData(dst, 0, 0);
+}
 export async function renderToBlob(renderer, composer, scene, camera, view, w, h, opts = {}, hide = []) {
-  const rt = composer.makeRT(w, h);
-  const nrt = new THREE.WebGLRenderTarget(w, h);
-  const out = new THREE.WebGLRenderTarget(w, h);
-  composer.render(scene, camera, view, { ...opts, force: true, rt, nrt, target: out, scale: Math.max(1, h / 900) }, hide);
-  const px = new Uint8Array(w * h * 4);
-  renderer.readRenderTargetPixels(out, 0, 0, w, h, px);
-  renderer.setRenderTarget(null);
-  rt.dispose(); nrt.dispose(); out.dispose();
   const c = document.createElement("canvas"); c.width = w; c.height = h;
   const g = c.getContext("2d");
-  const img = g.createImageData(w, h);
-  for (let y = 0; y < h; y++) img.data.set(px.subarray((h - 1 - y) * w * 4, (h - y) * w * 4), y * w * 4);
-  g.putImageData(img, 0, 0);
+  // Imágenes grandes (impresión a 600 ppp) se hacen por mosaicos: cada mosaico ve un pedazo del mismo
+  // encuadre (setViewOffset) y el shader usa coordenadas de la imagen completa, así el rayado, la viñeta
+  // y los efectos continúan sin costuras. Los mosaicos se traslapan para que el contorno no se corte.
+  const max = Math.min(2048, renderer.capabilities.maxTextureSize || 2048), pad = 12;
+  const tiled = w > max || h > max;
+  const step = max - pad * 2;
+  const scale = Math.max(1, h / 900);
+  // el ojo de pez mira fuera del mosaico; por mosaicos se renderiza recto y se curva al final, en la imagen completa
+  const fish = tiled ? view.fisheye || 0 : 0;
+  if (fish) view = { ...view, fisheye: 0 };
+  for (let ty = 0; ty < h; ty += tiled ? step : h) {
+    for (let tx = 0; tx < w; tx += tiled ? step : w) {
+      const x0 = tiled ? Math.max(0, tx - pad) : 0, y0 = tiled ? Math.max(0, ty - pad) : 0;
+      const tw = tiled ? Math.min(w, tx + step + pad) - x0 : w, th = tiled ? Math.min(h, ty + step + pad) - y0 : h;
+      if (tiled) { camera.setViewOffset(w, h, x0, y0, tw, th); camera.updateProjectionMatrix(); }
+      const rt = composer.makeRT(tw, th), nrt = new THREE.WebGLRenderTarget(tw, th), out = new THREE.WebGLRenderTarget(tw, th);
+      composer.render(scene, camera, view, { ...opts, force: true, rt, nrt, target: out, scale, tile: [x0, h - (y0 + th), w, h] }, hide);
+      const px = new Uint8Array(tw * th * 4);
+      renderer.readRenderTargetPixels(out, 0, 0, tw, th, px);
+      renderer.setRenderTarget(null);
+      rt.dispose(); nrt.dispose(); out.dispose();
+      const img = g.createImageData(tw, th);
+      for (let y = 0; y < th; y++) img.data.set(px.subarray((th - 1 - y) * tw * 4, (th - y) * tw * 4), y * tw * 4);
+      // solo se pega la parte sin traslape
+      const cx = tiled ? tx - x0 : 0, cy = tiled ? ty - y0 : 0, cw = tiled ? Math.min(step, w - tx) : w, ch = tiled ? Math.min(step, h - ty) : h;
+      g.putImageData(img, x0, y0, cx, cy, cw, ch);
+      if (tiled) await new Promise(r => setTimeout(r, 0));
+    }
+  }
+  if (tiled) { camera.clearViewOffset(); camera.updateProjectionMatrix(); }
+  if (fish) barrelCanvas(c, fish);
+  if (opts.noBlob) return { canvas: c };
   return new Promise(res => c.toBlob(b => res({ blob: b, canvas: c }), "image/png"));
 }

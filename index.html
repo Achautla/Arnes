@@ -96,9 +96,10 @@
       <p class="sub">Toda la página con sus viñetas, globos y bordes, en el estilo que elijas.</p>
       <div class="frow">
         <label class="sel"><span>Estilo</span><select id="xpstyle"><option value="actual">Cada viñeta como está</option><option value="clay">Arcilla</option><option value="color">Color</option><option value="values">Valores</option><option value="noir">Noir</option><option value="manga">Manga</option><option value="cel">Cel</option><option value="grabado">Grabado sepia</option><option value="dinamico">Color dinámico</option><option value="pintura">Pintura</option><option value="blue">Líneas azules para entintar</option></select></label>
-        <label class="sel"><span>Resolución</span><select id="xpdpi"><option value="150">150 ppp</option><option value="300" selected>300 ppp</option></select></label>
+        <label class="sel"><span>Resolución</span><select id="xpdpi"><option value="150">150 ppp</option><option value="300" selected>300 ppp</option><option value="600">600 ppp (impresión fina)</option></select></label>
       </div>
       <label class="toggle"><span>Con contorno</span><input type="checkbox" id="xpline" checked></label>
+      <label class="toggle"><span>Sangrado de 3 mm con marcas de corte</span><input type="checkbox" id="xpbleed"></label>
       <div class="row"><button class="btn accent" data-x="page-pdf">Página en PDF</button><button class="btn" data-x="page-png">Página en PNG</button></div>
     </section>
     <section>
@@ -119,6 +120,19 @@
       <label class="toggle"><span>Con contorno</span><input type="checkbox" id="xline" checked></label>
       <label class="toggle"><span>Fondo transparente</span><input type="checkbox" id="xclear"></label>
       <div class="row"><button class="btn" data-x="png">Descargar PNG</button></div>
+    </section>
+    <section>
+      <h3>Video</h3>
+      <p class="sub">Cada viñeta es un cuadro clave: Arnés mueve la cámara y a los personajes de una a la siguiente. Para animar un movimiento, duplica la viñeta y cambia la pose o la cámara en la copia. Se renderiza cuadro por cuadro con el estilo de cada viñeta.</p>
+      <div class="frow">
+        <label class="sel"><span>Hasta la viñeta</span><select id="xvto"></select></label>
+        <label class="sel"><span>Duración</span><select id="xvsec"><option value="15" selected>15 s</option><option value="30">30 s</option><option value="45">45 s</option><option value="60">60 s</option><option value="90">90 s</option></select></label>
+      </div>
+      <div class="frow">
+        <label class="sel"><span>Formato</span><select id="xvfmt"><option value="16:9">16:9 horizontal</option><option value="9:16">9:16 vertical (reels)</option><option value="1:1">1:1 cuadrado</option><option value="4:5">4:5 publicación</option></select></label>
+        <label class="sel"><span>Calidad</span><select id="xvq"><option value="1080">Full HD (1080p)</option><option value="720">Ligero (720p)</option></select></label>
+      </div>
+      <div class="row"><button class="btn accent" data-x="video">Hacer video</button><button class="btn" data-x="video-stop" hidden>Detener</button></div>
     </section>
     <section>
       <h3>Para otras apps</h3>

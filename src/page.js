@@ -22,7 +22,11 @@ export const TEMPLATES = {
   diagonal: { label: "Diagonal (4)", rows: [[1, [1]], [1.1, [1, 1]], [0.9, [1]]], tilt: 22, split: 26 },
   tiras: { label: "Tiras verticales (3)", rows: [[1, [1, 1, 1]]], split: 10 },
 };
-export const BALLOONS = { globo: "Diálogo", pensamiento: "Pensamiento", grito: "Grito", caja: "Narración" };
+export const BALLOONS = { globo: "Diálogo", pensamiento: "Pensamiento", grito: "Grito", caja: "Narración", sfx: "Onomatopeya" };
+export const BALLOON_STYLES = { limpio: "Limpio", mano: "Entintado a mano", noir: "Noir", manga: "Manga" };
+const SFX_FONTS = { golpe: "Impact, 'Arial Black', sans-serif", pincel: "'Brush Script MT', 'Segoe Script', cursive", bloque: "'Arial Black', 'Helvetica Neue', sans-serif" };
+// trazo que tiembla un poco, como una línea a mano (determinista por globo)
+function wob(id, i) { let h = 2166136261; const s = id + ":" + i; for (let k = 0; k < s.length; k++) h = Math.imul(h ^ s.charCodeAt(k), 16777619); return ((h >>> 0) / 4294967296) - 0.5; }
 
 export function newPage(n = 1, format = "americano") {
   const f = FORMATS[format];
@@ -191,25 +195,44 @@ export function createPageEditor(deps) {
 
   function balloonSvg(b, on) {
     const { x, y, w, h } = b, t = b.tail || [x, y + h];
+    const st = b.bstyle || "limpio", hand = st === "mano";
+    const fill = st === "noir" && b.shape === "caja" ? "#efe3bd" : "#fff";
+    const sw = hand ? 0.75 : st === "manga" ? 0.3 : st === "noir" ? 0.55 : 0.45;
+    const sty = `style="fill:${fill};stroke:#111;stroke-width:${sw};stroke-linejoin:round"`, styN = `style="fill:${fill};stroke:none"`;
+    const poly = pts => `<polygon points="${pts.map(p => p.map(v => round(v, 2)).join(",")).join(" ")}" ${sty}/>`;
+    if (b.shape === "sfx") {
+      const txt = String(b.text || "¡PUM!").toUpperCase().split("\n").slice(0, 2);
+      const maxLen = Math.max(...txt.map(l => [...l].length), 1);
+      const fs = Math.min(h / (txt.length * 0.9), w / (maxLen * 0.6)), col = b.color || "#f2c230", rot = b.rot || -8;
+      const font = SFX_FONTS[b.font || "golpe"];
+      const line = (l, i) => `<text x="${x}" y="${y + (i - (txt.length - 1) / 2) * fs * 0.92 + fs * 0.34}" style="font-family:${font};font-size:${round(fs, 2)}px;font-weight:900;letter-spacing:${round(fs * 0.02, 2)}px;text-anchor:middle;fill:${col};stroke:#111;stroke-width:${round(fs * 0.09, 2)};paint-order:stroke;stroke-linejoin:round">${esc(l)}</text>`;
+      return `<g class="pv-balloon${on ? " sel" : ""}" data-balloon="${b.id}" transform="translate(${x} ${y}) rotate(${rot}) skewX(${b.skew ?? -6}) translate(${-x} ${-y})">${txt.map(line).join("")}<rect x="${x - w / 2}" y="${y - h / 2}" width="${w}" height="${h}" style="fill:transparent;stroke:none"/></g>` + (on ? `<circle cx="${x + w / 2}" cy="${y + h / 2}" r="2.2" class="pv-size" data-size="${b.id}"/>` : "");
+    }
     let shape;
-    if (b.shape === "caja") shape = `<rect x="${x - w / 2}" y="${y - h / 2}" width="${w}" height="${h}" class="pv-bl"/>`;
-    else if (b.shape === "grito") {
-      const pts = Array.from({ length: 18 }, (_, i) => { const a = (i / 18) * Math.PI * 2, r = i % 2 ? 0.78 : 1.12; return [x + Math.cos(a) * w / 2 * r, y + Math.sin(a) * h / 2 * r]; });
-      shape = `<polygon points="${pts.map(p => p.join(",")).join(" ")}" class="pv-bl"/>`;
+    const ell = (rx, ry, n = 40) => Array.from({ length: n }, (_, i) => { const a = (i / n) * Math.PI * 2, j = hand ? 1 + wob(b.id, i) * 0.07 : 1; return [x + Math.cos(a) * rx * j, y + Math.sin(a) * ry * j]; });
+    if (b.shape === "caja") {
+      shape = hand ? poly([[x - w / 2, y - h / 2], [x + w / 2, y - h / 2], [x + w / 2, y + h / 2], [x - w / 2, y + h / 2]].map((p, i) => [p[0] + wob(b.id, i) * 1.2, p[1] + wob(b.id, i + 9) * 1.2]))
+        : `<rect x="${x - w / 2}" y="${y - h / 2}" width="${w}" height="${h}" ${sty}/>`;
+    } else if (b.shape === "grito") {
+      const pts = Array.from({ length: 18 }, (_, i) => { const a = (i / 18) * Math.PI * 2, r = (i % 2 ? 0.78 : 1.12) * (hand ? 1 + wob(b.id, i) * 0.12 : 1); return [x + Math.cos(a) * w / 2 * r, y + Math.sin(a) * h / 2 * r]; });
+      shape = poly(pts);
     } else if (b.shape === "pensamiento") {
-      shape = Array.from({ length: 9 }, (_, i) => { const a = (i / 9) * Math.PI * 2; return `<circle cx="${x + Math.cos(a) * w * 0.36}" cy="${y + Math.sin(a) * h * 0.32}" r="${Math.min(w, h) * 0.3}" class="pv-bl"/>`; }).join("") +
-        `<ellipse cx="${x}" cy="${y}" rx="${w * 0.42}" ry="${h * 0.38}" class="pv-bl noline"/>` +
-        `<circle cx="${(x + t[0]) / 2}" cy="${(y + h / 2 + t[1]) / 2}" r="1.6" class="pv-bl"/><circle cx="${t[0]}" cy="${t[1]}" r="1" class="pv-bl"/>`;
-    } else shape = `<ellipse cx="${x}" cy="${y}" rx="${w / 2}" ry="${h / 2}" class="pv-bl"/>`;
+      shape = Array.from({ length: 9 }, (_, i) => { const a = (i / 9) * Math.PI * 2; return `<circle cx="${x + Math.cos(a) * w * 0.36}" cy="${y + Math.sin(a) * h * 0.32}" r="${Math.min(w, h) * 0.3 * (hand ? 1 + wob(b.id, i) * 0.15 : 1)}" ${sty}/>`; }).join("") +
+        `<ellipse cx="${x}" cy="${y}" rx="${w * 0.42}" ry="${h * 0.38}" ${styN}/>` +
+        `<circle cx="${(x + t[0]) / 2}" cy="${(y + h / 2 + t[1]) / 2}" r="1.6" ${sty}/><circle cx="${t[0]}" cy="${t[1]}" r="1" ${sty}/>`;
+    } else if (st === "manga") shape = poly(ell(w * 0.42, h * 0.56));
+    else shape = hand ? poly(ell(w / 2, h / 2)) : `<ellipse cx="${x}" cy="${y}" rx="${w / 2}" ry="${h / 2}" ${sty}/>`;
     const tail = b.shape === "globo" || b.shape === "grito" ? (() => {
-      const ang = Math.atan2(t[1] - y, t[0] - x), s = Math.min(w, h) * 0.16;
+      const ang = Math.atan2(t[1] - y, t[0] - x), s = Math.min(w, h) * (st === "manga" ? 0.1 : 0.16);
       const bx = x + Math.cos(ang) * w * 0.38, by = y + Math.sin(ang) * h * 0.38;
       const nx = -Math.sin(ang) * s, ny = Math.cos(ang) * s;
-      return `<polygon points="${bx + nx},${by + ny} ${bx - nx},${by - ny} ${t[0]},${t[1]}" class="pv-bl"/><polygon points="${bx + nx * 0.7},${by + ny * 0.7} ${bx - nx * 0.7},${by - ny * 0.7} ${bx + Math.cos(ang) * 2},${by + Math.sin(ang) * 2}" class="pv-bl noline"/>`;
+      const tip = hand ? [t[0] + nx * 0.4, t[1] + ny * 0.4] : t;
+      return `<polygon points="${bx + nx},${by + ny} ${bx - nx},${by - ny} ${tip[0]},${tip[1]}" ${sty}/><polygon points="${bx + nx * 0.7},${by + ny * 0.7} ${bx - nx * 0.7},${by - ny * 0.7} ${bx + Math.cos(ang) * 2},${by + Math.sin(ang) * 2}" ${styN}/>`;
     })() : "";
     const lines = String(b.text || "").toUpperCase().split("\n").slice(0, 4);
     const fs = Math.min(4.2, h / (lines.length + 1.2));
-    const txt = lines.map((l, i) => `<text x="${x}" y="${y + (i - (lines.length - 1) / 2) * fs * 1.15 + fs * 0.35}" class="pv-blt" style="font-size:${fs}px">${esc(l)}</text>`).join("");
+    const font = st === "noir" && b.shape === "caja" ? "'Courier New', Courier, monospace" : st === "manga" ? "'Noto Sans', 'Helvetica Neue', sans-serif" : "'Comic Neue', 'Comic Sans MS', sans-serif";
+    const txt = lines.map((l, i) => `<text x="${x}" y="${y + (i - (lines.length - 1) / 2) * fs * 1.15 + fs * 0.35}" class="pv-blt" style="font-size:${fs}px;font-family:${font};font-weight:${st === "manga" ? 500 : 700}">${esc(st === "manga" ? l.toLowerCase().replace(/^./, c => c.toUpperCase()) : l)}</text>`).join("");
     return `<g class="pv-balloon${on ? " sel" : ""}" data-balloon="${b.id}">${tail}${shape}${txt}</g>` + (on ? `<circle cx="${t[0]}" cy="${t[1]}" r="2.4" class="pv-tail" data-tail="${b.id}"/><circle cx="${x + w / 2}" cy="${y + h / 2}" r="2.2" class="pv-size" data-size="${b.id}"/>` : "");
   }
 
@@ -290,6 +313,11 @@ export function createPageEditor(deps) {
     h += `<h3>Globos y textos</h3><div class="pills">${Object.entries(BALLOONS).map(([k, l]) => pill(k, "", "+ " + l, "bl-add")).join("")}</div>`;
     if (sb) h += `<div class="card"><textarea class="text" data-act="bl-text" rows="3" aria-label="Texto del globo">${esc(sb.text || "")}</textarea>
       <div class="pills">${Object.entries(BALLOONS).map(([k, l]) => pill(k, sb.shape, l, "bl-shape")).join("")}</div>
+      ${sb.shape === "sfx" ? `<div class="pills"><span class="pl">Letra</span>${[["golpe", "Golpe"], ["bloque", "Bloque"], ["pincel", "Pincel"]].map(([k, l]) => pill(k, sb.font || "golpe", l, "bl-font")).join("")}</div>
+        <label class="fld"><span>Giro</span><input type="range" data-act="bl-rot" min="-45" max="45" step="1" value="${sb.rot ?? -8}"></label>
+        <div class="row colorrow"><label class="sel"><span>Color</span><input type="color" data-act="bl-color" value="${sb.color || "#f2c230"}"></label></div>`
+      : `<div class="pills"><span class="pl">Estilo</span>${Object.entries(BALLOON_STYLES).map(([k, l]) => pill(k, sb.bstyle || "limpio", l, "bl-style")).join("")}</div>
+        <button class="btn" data-act="bl-style-all">Usar este estilo en todos los globos de la página</button>`}
       <p class="sub">Arrastra el globo para moverlo, el punto azul para la cola y el gris para el tamaño.</p><button class="btn danger" data-act="bl-del">Borrar globo</button></div>`;
     h += `<div class="row"><button class="btn accent" data-act="pg-export">Exportar esta página</button></div>`;
     return h;
@@ -321,8 +349,12 @@ export function createPageEditor(deps) {
       case "pn-border": if (sp) sp.border = !sp.border; break;
       case "pn-bleed": if (sp) { sp.pts = sp.pts.map(([x, y]) => [x <= pg.margin + 1 ? -3 : x >= F.w - pg.margin - 1 ? F.w + 3 : x, y <= pg.margin + 1 ? -3 : y >= F.h - pg.margin - 1 ? F.h + 3 : y]); syncAspect(sp); } break;
       case "pn-del": if (sp) { pg.panels.splice(pg.panels.indexOf(sp), 1); sel = null; } break;
-      case "bl-add": { const b = { id: uid("bl"), shape: val, x: F.w / 2, y: F.h * 0.3, w: 46, h: 22, tail: [F.w / 2 + 8, F.h * 0.3 + 22], text: val === "caja" ? "Mientras tanto…" : "Texto" }; pg.balloons.push(b); selBalloon = b.id; sel = null; break; }
-      case "bl-shape": if (sb) sb.shape = val; break;
+      case "bl-add": { const b = { id: uid("bl"), shape: val, x: F.w / 2, y: F.h * 0.3, w: 46, h: 22, tail: [F.w / 2 + 8, F.h * 0.3 + 22], text: val === "caja" ? "Mientras tanto…" : val === "sfx" ? "¡PUM!" : "Texto", bstyle: pg.balloons.find(x => x.shape !== "sfx")?.bstyle };
+        if (val === "sfx") Object.assign(b, { w: 60, h: 26, tail: null, rot: -8, color: "#f2c230" }); pg.balloons.push(b); selBalloon = b.id; sel = null; break; }
+      case "bl-shape": if (sb) { sb.shape = val; if (val === "sfx" && (!sb.text || sb.text === "Texto")) sb.text = "¡PUM!"; } break;
+      case "bl-style": if (sb) sb.bstyle = val; break;
+      case "bl-font": if (sb) sb.font = val; break;
+      case "bl-style-all": if (sb) pg.balloons.forEach(b => { if (b.shape !== "sfx") b.bstyle = sb.bstyle || "limpio"; }); toast("Todos los globos de la página tienen ese estilo."); break;
       case "bl-del": if (sb) { pg.balloons.splice(pg.balloons.indexOf(sb), 1); selBalloon = null; } break;
       case "pg-export": deps.openExport(); return;
       default: return false;
@@ -341,22 +373,25 @@ export function createPageEditor(deps) {
       draw(); return true;
     }
     if (act === "bl-text") { const sb = pg.balloons.find(b => b.id === selBalloon); if (sb) { sb.text = el.value; draw(); } return true; }
+    if (act === "bl-rot" || act === "bl-color") { const sb = pg.balloons.find(b => b.id === selBalloon); if (sb) { if (act === "bl-rot") sb.rot = +el.value; else sb.color = el.value; draw(); } return true; }
     return false;
   }
   function onChangeEl(act, el) {
     const pg = page(), sp = pg.panels.find(p => p.id === sel);
     if (act === "pn-v" && sp) { sp.v = el.value || null; syncAspect(sp); onChange(); draw(); renderPanel(); return true; }
-    if (act === "pg-range" || act === "bl-text") { onChange(); return true; }
+    if (act === "pg-range" || act === "bl-text" || act === "bl-rot" || act === "bl-color") { onChange(); return true; }
     return false;
   }
 
   // ---- Exportar la página completa
-  async function exportCanvas({ dpi = 300, style = "actual", outline = null, blue = false }) {
+  async function exportCanvas({ dpi = 300, style = "actual", outline = null, blue = false, bleed = 0, onProgress }) {
     const pg = page(), F = FORMATS[pg.format];
-    const k = dpi / 25.4, W = Math.round(F.w * k), H = Math.round(F.h * k);
-    const c = document.createElement("canvas"); c.width = W; c.height = H;
+    const k = dpi / 25.4, W = Math.round(F.w * k), H = Math.round(F.h * k), B = Math.round(bleed * k);
+    const c = document.createElement("canvas"); c.width = W + B * 2; c.height = H + B * 2;
     const g = c.getContext("2d");
-    g.fillStyle = "#fff"; g.fillRect(0, 0, W, H);
+    g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height);
+    g.translate(B, B);
+    let done = 0;
     const ink = blue ? "#5aa9e0" : "#111";
     for (const p of pg.panels) {
       const b = bbox(p.pts), v = vin(p.v);
@@ -372,6 +407,7 @@ export function createPageEditor(deps) {
         g.drawImage(canvas, b.x * k, b.y * k);
       }
       g.restore();
+      onProgress?.(++done / pg.panels.length);
       if (p.border) { g.beginPath(); p.pts.forEach(([x, y], i) => (i ? g.lineTo(x * k, y * k) : g.moveTo(x * k, y * k))); g.closePath(); g.lineWidth = 0.7 * k; g.strokeStyle = ink; g.stroke(); }
     }
     // Globos: se dibujan desde su SVG para que salgan iguales a la pantalla
@@ -381,7 +417,15 @@ export function createPageEditor(deps) {
       await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svgTxt); });
       g.drawImage(img, 0, 0, W, H);
     }
-    return { canvas: c, F };
+    if (B) { // marcas de corte en las cuatro esquinas, fuera del área de la página
+      g.setTransform(1, 0, 0, 1, 0, 0); g.strokeStyle = "#000"; g.lineWidth = Math.max(1, 0.25 * k);
+      const L = B * 0.8;
+      for (const [x, y] of [[B, B], [B + W, B], [B, B + H], [B + W, B + H]]) {
+        g.beginPath(); g.moveTo(x, y < c.height / 2 ? 0 : c.height); g.lineTo(x, y < c.height / 2 ? L : c.height - L);
+        g.moveTo(x < c.width / 2 ? 0 : c.width, y); g.lineTo(x < c.width / 2 ? L : c.width - L, y); g.stroke();
+      }
+    }
+    return { canvas: c, F, bleed };
   }
 
   return {

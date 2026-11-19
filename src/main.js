@@ -10,7 +10,8 @@ import { LIGHT_TYPES, newLight, buildLight, buildLightIcon, presetNoir, presetDa
 import { Composer, renderToBlob, MODES, LIGHT_NOTES, STYLE_KEYS, BASE_STYLES, FX } from "./render.js";
 import { applyAtmosphere, aspectOf, sceneFor, disposeScene } from "./scenes.js";
 import { SCENARIOS } from "./scenarios.js";
-import { createPageEditor, styleView, FORMATS } from "./page.js";
+import { createPageEditor, styleView, FORMATS, newPage } from "./page.js";
+import { detectLocal, detectAI, readingOrder, toPagePanels } from "./pageread.js";
 import { Store, ASPECTS, newVineta, defaultView, defaultCamera } from "./store.js";
 import { buildExample } from "./example.js";
 import { createHome } from "./home.js";
@@ -21,6 +22,7 @@ import { equip, ACCESSORIES, MATERIALS as ACC_MATS, FINGER_NAMES, newAccessory }
 import * as cloud from "./cloud.js";
 import { analyzeLocal, analyzeAI, AI_DEFAULT_MODEL } from "./calibrate.js";
 import { drawStrokes, aiFinish, AI_IMAGE_MODEL } from "./strokes.js";
+import { makeVideo } from "./video.js";
 
 const PAPER = 0xf1f0ec, DARK = 0x111214, BLUE = 0x7cc0ea, BLUE_DEEP = 0x3e7fb0;
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -876,7 +878,9 @@ function renderPanel() {
   if (t === "escena") h = panelEscena();
   else if (t === "pose") h = panelPose();
   else if (t === "camara") h = panelCamara();
-  else if (t === "pagina") h = pageEd.panelHtml(pill);
+  else if (t === "pagina") h = pageEd.panelHtml(pill) + `<h3>Página desde una foto</h3><p class="sub">Toma foto o escanea una página tuya: Arnés encuentra las viñetas, su orden de lectura y su proporción, y crea una página nueva con una viñeta vacía por cada recuadro.${aiConf().key ? " Con tu clave, Gemini corrige los recuadros inclinados o sin marco y describe cada viñeta." : ""}</p>
+    <label class="btn wide filebtn">${ui.pageBusy ? "Leyendo la página…" : "Elegir foto de la página"}<input type="file" id="pagefile" accept="image/*" hidden ${ui.pageBusy ? "disabled" : ""}></label>
+    ${ui.pageReport ? `<div class="card calrep">${ui.pageReport.map(l => `<p class="sub">${esc(l)}</p>`).join("")}</div>` : ""}`;
   else h = panelLuz();
   panel.innerHTML = h;
   $("#vchip").textContent = store.v.name;
@@ -1019,6 +1023,54 @@ $("#drill-pause").addEventListener("click", () => { if (drill) { drill.paused = 
 $("#drill-end").addEventListener("click", () => endDrill(false));
 $("#drill-keep").addEventListener("click", () => endDrill(false, true));
 
+async function pageFromPhoto(file) {
+  ui.pageBusy = true; ui.pageReport = null; renderPanel();
+  const P = store.project, rep = [];
+  try {
+    const { panels: found, canvas, aspect } = await detectLocal(file);
+    let panels = found, reading = pageEd.page()?.read || "occidental", via = "local";
+    const ai = aiConf();
+    if (ai.key && cloud.reachable()) {
+      try {
+        const r = await detectAI(canvas, { key: ai.key, model: ai.model || AI_DEFAULT_MODEL }, reading); panels = r.panels; reading = r.reading; via = "ia";
+        // si el teléfono encontró las mismas viñetas, se conservan sus esquinas inclinadas con el orden y la descripción de Gemini
+        if (found.length === panels.length) {
+          const cen = q => [q.reduce((a, p) => a + p[0], 0) / q.length, q.reduce((a, p) => a + p[1], 0) / q.length], used = new Set();
+          for (const pnl of panels) {
+            const c = cen(pnl.quad); let best = -1, bd = Infinity;
+            found.forEach((f, i) => { if (used.has(i)) return; const fc = cen(f.quad), dd = Math.hypot(fc[0] - c[0], fc[1] - c[1]); if (dd < bd) { bd = dd; best = i; } });
+            if (best >= 0 && bd < 0.15) { used.add(best); pnl.quad = found[best].quad; }
+          }
+        }
+      }
+      catch (e) { rep.push(e.message); }
+    }
+    if (!panels.length) panels = [{ rect: [0.05, 0.05, 0.9, 0.9], quad: [[0.05, 0.05], [0.95, 0.05], [0.95, 0.95], [0.05, 0.95]] }];
+    const order = via === "ia" ? panels.map((_, i) => i) : readingOrder(panels.map(p => p.rect), reading);
+    panels = order.map(i => panels[i]);
+    // el formato de papel más parecido a la foto
+    const fmt = Object.entries(FORMATS).sort((a, b) => Math.abs(a[1].w / a[1].h - aspect) - Math.abs(b[1].w / b[1].h - aspect))[0][0];
+    const pg = newPage(P.pages.length + 1, fmt), F = FORMATS[fmt];
+    pg.name = `Página ${P.pages.length + 1} · ${file.name.replace(/\.[^.]+$/, "").slice(0, 20)}`; pg.read = reading; pg.balloons = [];
+    const polys = toPagePanels(panels.map(p => p.quad), F);
+    pg.panels = polys.map((pts, i) => {
+      const v = newVineta(`Pág. ${P.pages.length + 1} · viñeta ${i + 1}`);
+      const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]), w = Math.max(...xs) - Math.min(...xs), h = Math.max(...ys) - Math.min(...ys);
+      v.camera.aspect = Math.round((w / h) * 1000) / 1000;
+      const m = panels[i];
+      if (m.descripcion) v.read = { plano: m.plano || "", angulo: m.angulo || "", personajes: m.personajes ?? null, descripcion: m.descripcion };
+      P.vinetas.push(v);
+      return { id: uid("pn"), v: v.id, border: true, pts };
+    });
+    P.pages.push(pg); P.curPage = P.pages.length - 1;
+    store.commit(); pageEd.draw(); renderPanel();
+    rep.unshift(`${pg.panels.length} viñetas encontradas${via === "ia" ? " con Gemini" : " en el teléfono"}, en orden de lectura ${reading === "manga" ? "manga (de derecha a izquierda)" : "occidental"}. Página en formato ${F.label}.`);
+    if (via === "ia") panels.slice(0, 8).forEach((m, i) => m.descripcion && rep.push(`${i + 1}. ${m.plano ? m.plano + ", " : ""}${m.descripcion}`));
+    rep.push("Cada viñeta quedó vacía con su proporción. Ábrela para armar la escena; armarla sola desde el dibujo es la siguiente entrega.");
+    if (via === "local" && pg.panels.length < 2) rep.push("Solo se encontró un recuadro. Si tu página tiene viñetas inclinadas o sin marco, pon tu clave de Gemini para que las encuentre.");
+  } catch (e) { console.error(e); rep.push("No se pudo leer esa foto. Prueba con JPG o PNG, con la página entera y derecha."); }
+  ui.pageBusy = false; ui.pageReport = rep; renderPanel();
+}
 function refImage() { try { return localStorage.getItem("arnes-ref") || ""; } catch { return ""; } }
 async function setRefImage(file) {
   const url = URL.createObjectURL(file);
@@ -1535,6 +1587,7 @@ panel.addEventListener("change", e => {
   const el = e.target, act = el.dataset.act, key = el.dataset.key;
   if (el.id === "glbfile") { importGlb(el.files[0]); el.value = ""; return; }
   if (el.id === "calfile") { const f = el.files[0]; el.value = ""; if (f) calibrate(f); return; }
+  if (el.id === "pagefile") { const f = el.files[0]; el.value = ""; if (f) pageFromPhoto(f); return; }
   if (el.id === "reffile") { const f = el.files[0]; el.value = ""; if (f) setRefImage(f); return; }
   if (el.dataset.act === "ai-key" || el.dataset.act === "ai-model" || el.dataset.act === "ai-imodel") { const a = aiConf(); a[{ "ai-key": "key", "ai-model": "model", "ai-imodel": "imageModel" }[el.dataset.act]] = el.value.trim(); writeAi(a); renderPanel(); toast(el.dataset.act === "ai-key" ? "Clave guardada solo en este dispositivo." : "Modelo guardado."); return; }
   if (!act) return;
@@ -1705,7 +1758,12 @@ addEventListener("keydown", e => {
 
 // Exportación
 const dlg = $("#export");
-$("#open-export").addEventListener("click", () => { dlg.showModal(); });
+function fillVideoTo() {
+  const P = store.project, sel = $("#xvto"); if (!sel) return;
+  sel.innerHTML = P.vinetas.map((v, i) => i < P.cur ? "" : `<option value="${i}"${i === Math.min(P.cur + 1, P.vinetas.length - 1) ? " selected" : ""}>${i === P.cur ? "Solo esta (acercamiento)" : esc(v.name)}</option>`).join("");
+}
+$("#open-export").addEventListener("click", () => { fillVideoTo(); dlg.showModal(); });
+let videoStop = false;
 dlg.addEventListener("click", async e => {
   const b = e.target.closest("[data-x]"); if (!b) { if (e.target === dlg) dlg.close(); return; }
   const x = b.dataset.x, st = $("#xstatus");
@@ -1727,17 +1785,32 @@ dlg.addEventListener("click", async e => {
       storeCamera();
       const pst = $("#xpstyle").value, dpi = +$("#xpdpi").value;
       st.textContent = "Dibujando la página…";
-      const { canvas } = await pageEd.exportCanvas({ dpi, style: pst === "blue" ? "clay" : pst, outline: $("#xpline").checked, blue: pst === "blue" });
+      const bleed = $("#xpbleed")?.checked ? 3 : 0;
+      const { canvas } = await pageEd.exportCanvas({ dpi, bleed, style: pst === "blue" ? "clay" : pst, outline: $("#xpline").checked, blue: pst === "blue", onProgress: f => { st.textContent = `Dibujando la página… ${Math.round(f * 100)} %`; } });
       const pg = pageEd.page(), name = slug(store.project.name || "pagina") + "-pag" + (store.project.curPage + 1);
       if (x === "page-png") {
         const blob = await new Promise(r => canvas.toBlob(r, "image/png"));
         st.textContent = await resultMsg(saveFile(name + ".png", blob));
       } else {
         const jsPDF = await loadJsPDF(), F = FORMATS[pg.format];
-        const doc = new jsPDF({ unit: "mm", format: [F.w, F.h], orientation: F.w > F.h ? "l" : "p" });
-        doc.addImage(canvas.toDataURL("image/jpeg", 0.93), "JPEG", 0, 0, F.w, F.h);
+        const PW = F.w + bleed * 2, PH = F.h + bleed * 2;
+        const doc = new jsPDF({ unit: "mm", format: [PW, PH], orientation: PW > PH ? "l" : "p" });
+        doc.addImage(canvas.toDataURL("image/jpeg", 0.93), "JPEG", 0, 0, PW, PH);
         st.textContent = await resultMsg(saveFile(name + ".pdf", doc.output("blob")));
       }
+    } else if (x === "video-stop") { videoStop = true; return;
+    } else if (x === "video") {
+      storeCamera(); store.commit();
+      const P = store.project, to = +$("#xvto").value, list = P.vinetas.slice(P.cur, Math.max(P.cur, to) + 1);
+      videoStop = false; $('[data-x="video-stop"]').hidden = false; b.disabled = true;
+      try {
+        const { blob, kind, size } = await withExportScene(() => makeVideo({ renderer, composer, vinetas: list, seconds: +$("#xvsec").value, fps: 24, format: $("#xvfmt").value, quality: $("#xvq").value,
+          styleView: v => styleView(v, "actual", null), cancelled: () => videoStop,
+          onProgress: f => { st.textContent = `Renderizando video… ${Math.round(f * 100)} %`; } }));
+        st.textContent = await resultMsg(saveFile(`${slug(store.v.name)}-${size[0]}x${size[1]}.${kind}`, blob));
+        if (kind === "webm") st.textContent += " Este navegador no codifica MP4; se guardó en WebM.";
+      } catch (e) { console.error(e); st.textContent = "No se pudo hacer el video. Prueba en 720p o con menos segundos."; }
+      $('[data-x="video-stop"]').hidden = true; b.disabled = false;
     } else if (x === "psd") {
       st.textContent = "Separando capas…";
       const blob = await exportPsd(+$("#xres").value);
@@ -1884,7 +1957,7 @@ function toast(msg) {
 
 // Acceso para pruebas desde la consola
 $("#hud-frame").addEventListener("click", frameView);
-window.__arnes = { frameView, pageEd, exportPsd, store, ui, select, setPose, figs, selectTab, applyShot, camera, controls, rebuildScene, renderPanel, markDirty, POSE_LIBRARY, addFigure, M, pinHere, setAnchor, groundFigure, migrate };
+window.__arnes = { frameView, pageEd, exportPsd, store, ui, select, setPose, figs, selectTab, applyShot, camera, controls, rebuildScene, renderPanel, markDirty, POSE_LIBRARY, addFigure, M, pinHere, setAnchor, groundFigure, migrate, renderer, composer, scene, renderToBlob, exportCamera, withExportScene, grid, ruler };
 
 // ---------------------------------------------------------------- Arranque
 $("#hint").textContent = coarse ? "Un dedo: girar · Dos dedos: acercar y desplazar · Toca para elegir" : "Arrastrar: girar · Clic derecho: desplazar · Rueda: acercar · F: encuadrar · Clic: elegir";
