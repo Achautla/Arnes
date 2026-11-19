@@ -75,8 +75,8 @@ body.through #frame { box-shadow: 0 0 0 9999px #000; outline: none; }
 body.through .exit { display: block; z-index: 5; }
 
 /* Pestañas */
-nav#tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; height: calc(var(--nav) + env(safe-area-inset-bottom)); padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); display: grid; grid-template-columns: repeat(5, 1fr); background: var(--graphite); border-top: 1px solid var(--line); }
-nav#tabs button { background: none; border: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: var(--muted); font-size: 12.5px; font-weight: 500; }
+nav#tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; height: calc(var(--nav) + env(safe-area-inset-bottom)); padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); display: grid; grid-template-columns: repeat(6, 1fr); background: var(--graphite); border-top: 1px solid var(--line); }
+nav#tabs button { background: none; border: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: var(--muted); font-size: 11.5px; font-weight: 500; }
 nav#tabs button svg { width: 22px; height: 22px; }
 nav#tabs button[aria-selected="true"] { color: var(--blue); }
 
@@ -151,7 +151,7 @@ dialog::backdrop { background: rgba(10, 11, 12, 0.6); }
   :root { --nav: 0px; }
   #viewport { right: var(--panel-w); bottom: 0; }
   nav#tabs { top: calc(var(--bar) + env(safe-area-inset-top)); bottom: auto; left: auto; right: 0; width: var(--panel-w); height: 56px; padding: 0; border-top: 0; border-left: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--graphite-2); }
-  nav#tabs button { flex-direction: column; gap: 2px; font-size: 12px; }
+  nav#tabs button { flex-direction: column; gap: 2px; font-size: 11px; }
   nav#tabs button svg { width: 18px; height: 18px; }
   aside#panel { top: calc(var(--bar) + 56px + env(safe-area-inset-top)); bottom: 0; left: auto; right: 0; width: var(--panel-w); max-height: none; border-radius: 0; border-top: 0; border-left: 1px solid var(--line); transform: none; padding: 12px 18px 28px; }
   .grabber { display: none; }
@@ -250,7 +250,7 @@ body.home-open > header, body.home-open > nav, body.home-open > aside { visibili
 #lnotes { position: absolute; top: 10px; left: 10px; z-index: 3; margin: 0; padding: 6px 9px; background: rgba(27,27,27,.82); border-radius: 8px; color: var(--ink); pointer-events: none; }
 #viewbar { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 8; display: flex; gap: 8px; align-items: center; padding: 6px 8px 6px 12px; background: var(--graphite-2); border: 1px solid var(--blue-deep); border-radius: 10px; max-width: calc(100% - 16px); }
 #viewbar span { font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-body.viewer nav#tabs button[data-tab="escena"], body.viewer nav#tabs button[data-tab="pose"], body.viewer nav#tabs button[data-tab="luz"], body.viewer #pchip { display: none; }
+body.viewer nav#tabs button[data-tab="escena"], body.viewer nav#tabs button[data-tab="pose"], body.viewer nav#tabs button[data-tab="taller"], body.viewer nav#tabs button[data-tab="luz"], body.viewer #pchip { display: none; }
 body.viewer nav#tabs { grid-template-columns: repeat(2, 1fr); }
 #xshare-url { flex: 1; min-width: 0; }
 body.viewer .pv-wrap { padding-top: 66px; }

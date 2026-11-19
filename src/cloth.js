@@ -29,6 +29,7 @@ export const GARMENTS = {
   capa: { label: "Capa", layer: 5, color: "#2b2a2f", mat: "suelto", length: 0.8, collar: "bajo" },
   // cuerpo continuo: una "piel" ceñida de una sola pieza sobre el maniquí (tronco, brazos y piernas)
   piel: { label: "Piel", layer: 0, color: "#c99a76", mat: "piel", hidden: true },
+  rebozo: { label: "Rebozo", layer: 4, color: "#7a3b33", mat: "suelto", humanOnly: true, hidden: true },
 };
 export const FOLD_TYPES = {
   tubo: "Tubo", zigzag: "Zigzag", espiral: "Espiral", medio: "Medio cierre", caida: "Caída", inerte: "Inerte",
@@ -503,7 +504,7 @@ export function dress(fig, clothes, opts = {}) {
   const R = restCapture(fig);
   let garments;
   try {
-    garments = clothes.map(g => ({ g, parts: buildGarment(fig, R, g, Qs) }))
+    garments = clothes.filter(g => !GARMENTS[g.type]?.humanOnly).map(g => ({ g, parts: buildGarment(fig, R, g, Qs) }))
       .sort((a, b) => (GARMENTS[a.g.type]?.layer || 0) - (GARMENTS[b.g.type]?.layer || 0));
     if (opts.hair && opts.hair.style && opts.hair.style !== "ninguno") {
       const hp = buildHair(fig, R, opts.hair, Qs);

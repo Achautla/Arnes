@@ -150,6 +150,7 @@ export const HAND_POSES = {
   lapiz: { label: "Sostener lápiz", c: [[45, 30, 15], [50, 35, 20], [70, 75, 50], [75, 80, 55]], s: [0, 0, 2, 4], t: [50, 30, 20, 20, 10] },
   garra: { label: "Garra", c: [[25, 65, 55], [25, 65, 55], [25, 65, 55], [25, 65, 55]], s: [-14, -4, 6, 16], t: [10, 10, 20, 40, 40] },
   pistola: { label: "Pistola", c: [[0, 0, 0], [88, 100, 70], [88, 100, 70], [88, 100, 70]], s: [-3, 0, 0, 0], t: [-15, -10, 0, 0, 0] },
+  pulgar: { label: "Pulgar arriba", c: [[88, 100, 65], [90, 100, 65], [92, 100, 65], [94, 100, 65]], s: [0, 0, 0, 0], t: [-25, 0, -10, -5, 0] },
   vaso: { label: "Vaso", c: [[35, 40, 25], [38, 42, 28], [40, 45, 30], [44, 48, 32]], s: [-3, 0, 3, 6], t: [30, 30, 10, 15, 10] },
 };
 export function handPoseRot(name, side) {
@@ -195,6 +196,7 @@ function dims(p) {
     upper: 0.172 * H, fore: 0.157 * H, hand: 0.108 * H,
   };
   d.neckY = d.shoulderY + 0.012 * H;
+  if (p.dims) Object.assign(d, p.dims); // cuerpo realista: el esqueleto toma las medidas de su malla
   return d;
 }
 const ball = new THREE.SphereGeometry(1, 28, 18);

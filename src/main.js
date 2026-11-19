@@ -25,6 +25,10 @@ import { putModel, syncUp as modelSyncUp, MAX_MODEL, externalizeModels, inlineMo
 import { analyzeLocal, analyzeAI, AI_DEFAULT_MODEL } from "./calibrate.js";
 import { drawStrokes, aiFinish, AI_IMAGE_MODEL, extractStrokes, loadBrushes } from "./strokes.js";
 import { makeVideo } from "./video.js";
+import { loadHuman, humanReady, attachHuman, humanDims, DEFAULT_HUMAN, yearsToAge, ageToYears } from "./human.js";
+import { dressHuman, equipHuman, humanShellAcc } from "./humandress.js";
+import * as T from "./taller.js";
+import { learnStyle, drawInStyle, describeStyle } from "./style.js";
 
 const PAPER = 0xf1f0ec, DARK = 0x111214, BLUE = 0x7cc0ea, BLUE_DEEP = 0x3e7fb0;
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -133,15 +137,18 @@ function buildObject(o) {
   let g;
   if (o.kind === "figure") {
     o.face ??= clone(M.DEFAULT_FACE); o.pins ??= {}; o.anchors ??= {};
-    const fig = M.buildFigure(o.params);
+    const real = o.human && humanReady();
+    const fig = M.buildFigure(real ? { ...o.params, dims: humanDims(o.human) } : o.params);
     M.applyPose(fig, o.pose, o.relaxed);
     M.applyFace(fig, o.face);
+    if (real) { attachHuman(fig, o.human, o.face); fig.human.setStyle(store.v.view.mode !== "clay", o.color, o.hair?.color); }
+    else if (o.human) needHuman();
     figs.set(o.id, fig);
     g = fig.root;
     g.position.fromArray(o.pos); g.rotation.set(0, (o.rotY || 0) * DEG, 0);
     fig.root.userData.isFigure = true;
-    if (o.clothes?.length || hasHair(o) || o.tex === "piel") dressFig(o, fig);
-    if (o.accessories?.length) fig.acc = equip(fig, o.accessories, { useColor: store.v.view.mode !== "clay" });
+    if (fig.human || o.clothes?.length || hasHair(o) || o.tex === "piel") dressFig(o, fig);
+    if (o.accessories?.length) fig.acc = fig.human ? equipHuman(fig, o.accessories, { useColor: store.v.view.mode !== "clay" }, equip) : equip(fig, o.accessories, { useColor: store.v.view.mode !== "clay" });
   } else {
     g = buildProp(o.type, o.params);
     g.position.fromArray(o.pos);
@@ -156,8 +163,24 @@ function buildObject(o) {
   world.set(o.id, g); content.add(g);
   return g;
 }
+// El cuerpo realista se descarga la primera vez que hace falta; mientras tanto se ve el maniquí
+let humanPending = false;
+function needHuman() {
+  if (humanPending) return; humanPending = true;
+  loadHuman().then(() => {
+    for (const o of store.v.objects) if (o.kind === "figure" && o.human) rebuildObject(o);
+    buildRuler(); renderPanel(); markDirty(3); if (ui.tab === "pagina") pageEd.draw();
+  }).catch(() => { humanPending = false; toast("No se pudo cargar el cuerpo realista. Revisa tu conexión; mientras tanto se usa el maniquí."); });
+}
 function dressFig(o, fig) {
   const v = store.v.view;
+  if (fig.human) {
+    fig.dress?.dispose();
+    const sa = humanShellAcc(o.accessories);
+    fig.dress = dressHuman(fig, o.clothes || [], { hair: o.hair, facial: o.human.facial, footwear: sa.footwear || o.human.footwear, footColor: sa.footColor, gloves: sa.gloves, useColor: v.mode !== "clay" });
+    fig.root.traverse(c => { c.userData.objId = o.id; });
+    return;
+  }
   fig.root.updateMatrixWorld(true);
   resetSkin(fig); // la ropa se mide sobre el cuerpo sin aplastar
   fig.dress?.dispose();
@@ -221,7 +244,7 @@ function applyBackground() {
 function repaintAll() {
   const useColor = !["clay", "grabado"].includes(store.v.view.mode);
   for (const f of figs.values()) { f.dress?.setStyle({ color: useColor, map: !!store.v.view.tension }); f.acc?.setStyle(useColor); }
-  for (const o of store.v.objects) { const g = world.get(o.id); if (g) paint(g, o.color || null, useColor, o.tex); }
+  for (const o of store.v.objects) { const g = world.get(o.id); if (g) paint(g, o.color || null, useColor, o.tex); figs.get(o.id)?.human?.setStyle(useColor, o.color, o.hair?.color); }
 }
 // Formas básicas: cajas de construcción sobre cada parte del cuerpo (ayuda para dibujar)
 const formsMat = new THREE.LineBasicMaterial({ color: 0x3e7fb0, transparent: true, opacity: 0.85 });
@@ -728,7 +751,7 @@ renderer.setAnimationLoop(now => {
 });
 
 // ---------------------------------------------------------------- Operaciones del modelo
-function addFigure() {
+function addFigure(opts = {}) {
   const n = store.v.objects.filter(o => o.kind === "figure").length;
   const pose = M.emptyPose();
   Object.assign(pose.rot, clone(POSE_LIBRARY.de_pie.pose.rot), M.handPoseRot("relajada", "L"), M.handPoseRot("relajada", "R"));
@@ -737,6 +760,7 @@ function addFigure() {
     params: { ...M.DEFAULT_PARAMS }, pose, hands: { L: "relajada", R: "relajada" },
     face: clone(M.DEFAULT_FACE), pins: {}, anchors: {}, gaze: null, relaxed: false,
   };
+  if (!opts.mannequin) { T.applyPreset(o, opts.preset || "adulto", { newGarment, newAccessory }); if (!opts.preset) o.name = `Personaje ${n + 1}`; } // nace con cuerpo realista
   store.v.objects.push(o); const g = buildObject(o);
   const fig = figs.get(o.id);
   pinHere(o, fig, "ankle_L"); pinHere(o, fig, "ankle_R");
@@ -881,6 +905,7 @@ const panel = $("#panel-body");
 const tabs = [...document.querySelectorAll('[role="tab"]')];
 function selectTab(name, fromUser = true) {
   const same = name === ui.tab;
+  if (name === "taller" && selObj()?.kind !== "figure") { const f = store.v.objects.find(x => x.kind === "figure"); if (f) ui.sel = f.id; }
   ui.tab = name;
   pageEd.show(name === "pagina");
   document.body.classList.toggle("page-mode", name === "pagina");
@@ -906,6 +931,7 @@ function renderPanel() {
   let h = "";
   if (t === "escena") h = panelEscena();
   else if (t === "pose") h = panelPose();
+  else if (t === "taller") h = T.panelHtml(selObj(), ui, { pill, esc, slider, toggle, HAND_POSES: M.HAND_POSES, SKIN_TONES, GARMENTS, CLOTH_TEX, ACCESSORIES });
   else if (t === "camara") h = panelCamara();
   else if (t === "pagina") h = pageEd.panelHtml(pill) + `<h3>Página desde una foto</h3><p class="sub">Toma foto o escanea una página tuya: Arnés encuentra las viñetas, su orden de lectura y su proporción, y crea una página nueva con una viñeta vacía por cada recuadro.${aiConf().key ? " Con tu clave, Gemini corrige los recuadros inclinados o sin marco y describe cada viñeta." : ""}</p>
     <label class="btn wide filebtn">${ui.pageBusy ? "Leyendo la página…" : "Elegir foto de la página"}<input type="file" id="pagefile" accept="image/*" hidden ${ui.pageBusy ? "disabled" : ""}></label>
@@ -955,8 +981,9 @@ function propsOf(o) {
     if (pp.length) h += `<div class="nums">${pp.map(([k, val]) => num("param:" + k, k[0].toUpperCase() + k.slice(1), val, ["escalones", "pisos", "semilla"].includes(k) ? "" : k === "densidad" ? "%" : "cm")).join("")}</div>`;
     h += `<div class="nums">${num("scale", "Escala", Math.round((o.scale?.[0] ?? 1) * 100), "%")}</div>`;
   }
-  if (isFig) h += clothesPanel(o);
-  if (isFig) h += `<h3>Superficie</h3><div class="pills">${pill("madera", o.tex === "piel" ? "piel" : "madera", "Madera (maniquí)", "fig-skin")}${pill("piel", o.tex === "piel" ? "piel" : "madera", "Piel", "fig-skin")}</div>`
+  if (isFig && o.human) h += `<h3>Cuerpo realista</h3><p class="sub">Cuerpo, rostro, piel, cabello y vestuario se editan en el Taller.</p><div class="row"><button class="btn accent" data-act="open-taller">Abrir el Taller</button></div>`;
+  if (isFig && !o.human) h += clothesPanel(o);
+  if (isFig && !o.human) h += `<h3>Superficie</h3><div class="pills">${pill("madera", o.tex === "piel" ? "piel" : "madera", "Madera (maniquí)", "fig-skin")}${pill("piel", o.tex === "piel" ? "piel" : "madera", "Piel", "fig-skin")}</div>`
     + (o.tex === "piel" ? `<div class="pills">${Object.entries(SKIN_TONES).map(([k, l]) => `<button class="pill${o.color === k ? " on" : ""}" data-act="fig-tone" data-val="${k}" aria-pressed="${o.color === k}"><span class="sw" style="background:${k}"></span>${l}</button>`).join("")}</div><p class="sub">Tronco, brazos y piernas quedan cubiertos por una piel continua que se dobla con las articulaciones; cabeza, manos y pies conservan la forma del maniquí con el mismo tono.</p>` : "");
   if (isFig) h += `<h3>Hojas de modelo</h3><p class="sub">Frente, perfil y espalda de este personaje dibujados por ti. El acabado con IA las usa para que se vea igual en todas las viñetas.</p>
     ${o.sheets?.length ? `<div class="strokestrip sheets">${o.sheets.map((u, i) => `<button class="sheetb" data-act="sheet-del" data-val="${i}" aria-label="Quitar hoja ${i + 1}"><img src="${u}" alt=""><span>×</span></button>`).join("")}</div>` : ""}
@@ -1337,6 +1364,27 @@ async function pageFromPhoto(file) {
   } catch (e) { console.error(e); rep.push("No se pudo leer esa foto. Prueba con JPG o PNG, con la página entera y derecha."); }
   ui.pageBusy = false; ui.pageReport = rep; renderPanel();
 }
+function learnedStyles() { try { return JSON.parse(localStorage.getItem("arnes-learned") || "[]"); } catch { return []; } }
+function writeLearned(a) { try { localStorage.setItem("arnes-learned", JSON.stringify(a)); } catch { toast("No cupo el estilo en este dispositivo."); } syncProfile(); }
+// Render con un estilo aprendido de los dibujos de un artista
+async function finalLearned() {
+  const list = learnedStyles(), prof = list[ui.learnedSel ?? 0];
+  if (!prof) { toast("Primero sube dibujos para aprender un estilo."); return; }
+  ui.finalBusy = "learned"; renderPanel();
+  try {
+    const v = store.v.view, [w, h] = finalSize(1800);
+    const lineView = { ...clone(v), mode: "clay", outline: true, contourOnly: true, thick: 1.1, fx: "ninguno" };
+    const toneView = { ...clone(v), mode: "clay", outline: false, fx: "ninguno" };
+    const { canvas: line } = await withExportScene(() => renderToBlob(renderer, composer, scene, exportCamera(), lineView, w, h, { clearBg: true, noBlob: true }, [grid, ruler]));
+    const { canvas: tone } = await withExportScene(() => renderToBlob(renderer, composer, scene, exportCamera(), toneView, Math.round(w / 2), Math.round(h / 2), { noBlob: true }, [grid, ruler]));
+    const { canvas: feat } = await withExportScene(() => renderToBlob(renderer, composer, scene, exportCamera(), { ...clone(v), mode: "color", outline: false, fx: "ninguno" }, w, h, { noBlob: true }, [grid, ruler]));
+    let under = null;
+    if (prof.engine === "grabado") under = (await withExportScene(() => renderToBlob(renderer, composer, scene, exportCamera(), { ...clone(v), mode: "grabado", outline: false, paper: prof.paper, sepia: prof.ink }, w, h, { noBlob: true }, [grid, ruler]))).canvas;
+    const canvas = await drawInStyle(line, tone, prof, { features: feat, under });
+    showFinal(canvas.toDataURL("image/png"), `Dibujado con el estilo «${prof.name}», aprendido de ${prof.pages} dibujo${prof.pages > 1 ? "s" : ""}. ${describeStyle(prof).slice(2, 4).join(" ")}`);
+  } catch (e) { console.error(e); toast("No se pudo dibujar con ese estilo. Intenta con menos objetos o en una computadora."); }
+  ui.finalBusy = null; renderPanel();
+}
 function myStrokes() { try { return JSON.parse(localStorage.getItem("arnes-strokes") || "[]"); } catch { return []; } }
 function writeStrokes(a) { try { localStorage.setItem("arnes-strokes", JSON.stringify(a)); } catch { toast("No cupieron los trazos en este dispositivo."); } syncProfile(); }
 function refImage() { try { return localStorage.getItem("arnes-ref") || ""; } catch { return ""; } }
@@ -1421,7 +1469,69 @@ function savedStyles() { try { return JSON.parse(localStorage.getItem("arnes-sty
 function writeStyles(a) { try { localStorage.setItem("arnes-styles", JSON.stringify(a)); } catch { toast("Este navegador no permite guardar estilos aquí."); } syncProfile(); }
 function savedChars() { try { return JSON.parse(localStorage.getItem("arnes-chars") || "[]"); } catch { return []; } }
 function writeChars(a) { try { localStorage.setItem("arnes-chars", JSON.stringify(a)); } catch { toast("Este navegador no permite guardar personajes aquí."); } syncProfile(); }
-const CHAR_KEYS = ["params", "face", "clothes", "hair", "accessories", "color", "hands", "tex", "bodyType", "sheets"];
+const CHAR_KEYS = ["params", "face", "clothes", "hair", "accessories", "color", "hands", "tex", "bodyType", "sheets", "human"];
+
+// ---------------------------------------------------------------- Taller: fichas enlazadas entre viñetas
+const LINK_KEYS = ["human", "hair", "clothes", "accessories", "color", "params", "tex", "bodyType", "sheets", "name"];
+function syncChar(o) {
+  if (!o || o.kind !== "figure" || o.localChar) return;
+  const P = store.project;
+  o.charId ??= uid("c");
+  P.chars ??= {};
+  const snap = {}; for (const k of LINK_KEYS) if (o[k] !== undefined) snap[k] = clone(o[k]);
+  snap.feat = clone(o.face?.feat || null);
+  P.chars[o.charId] = snap;
+  for (const vin of P.vinetas) for (const f of vin.objects) {
+    if (f === o || f.kind !== "figure" || f.charId !== o.charId || f.localChar) continue;
+    for (const k of LINK_KEYS) { if (snap[k] === undefined) delete f[k]; else f[k] = clone(snap[k]); }
+    if (snap.feat) { f.face ??= clone(M.DEFAULT_FACE); f.face.feat = clone(snap.feat); }
+    if (vin === store.v) rebuildObject(f);
+  }
+}
+function applyChar(o) { rebuildObject(o); syncChar(o); buildRuler(); markDirty(3); }
+let tallerTimer = 0;
+function tallerClick(act, val, el) {
+  if (act === "t-add") {
+    addFigure({ preset: val }); const f = store.v.objects.at(-1); rebuildObject(f); groundFigure(figs.get(f.id)); f.pose = M.readPose(figs.get(f.id), f.pose);
+    syncChar(f); store.commit(); renderPanel(); markDirty(3); return;
+  }
+  const o = selObj(); if (!o || o.kind !== "figure") return;
+  const r = T.click(o, act, val, el, ui, { newGarment, newAccessory, handPoseRot: M.handPoseRot });
+  if (r.rebuild) applyChar(o);
+  if (r.ground) { const f = figs.get(o.id); if (f) { groundFigure(f); o.pose = M.readPose(f, o.pose); } }
+  if (r.sync) syncChar(o);
+  if (r.save) {
+    const c = { name: o.name }; for (const k of CHAR_KEYS) if (o[k] !== undefined) c[k] = clone(o[k]);
+    const list = savedChars().filter(x => x.name !== c.name); list.push(c); writeChars(list);
+    toast(`«${c.name}» guardado en tus personajes (Escena → Tus personajes).`);
+  }
+  if (r.dup) { duplicateSelected(); const c = selObj(); if (c) { c.charId = uid("c"); c.name = o.name + " (variante)"; syncChar(c); } toast("Variante creada con su propia ficha."); }
+  if (r.toast) toast(r.toast);
+  if (r.rebuild || r.sync || r.ground || r.dup) store.commit();
+  if (r.render !== false) renderPanel();
+}
+function tallerInput(el) {
+  const o = selObj(); if (!o) return;
+  const out = document.getElementById(el.id + "-o");
+  if (el.type === "range") {
+    if (out) out.textContent = fmt(+el.value, +el.step);
+    if (T.input(o, el.dataset.act, el.dataset.key, +el.value)) {
+      clearTimeout(tallerTimer);
+      tallerTimer = setTimeout(() => { rebuildObject(o); markDirty(3); }, 90);
+    }
+  }
+}
+function tallerChange(el) {
+  const o = selObj(); if (!o) return;
+  const act = el.dataset.act, key = el.dataset.key;
+  if (act === "t-tone-c") o.color = el.value;
+  else if (act === "t-hair-c") { o.hair ??= { style: "corto" }; o.hair.color = el.value; }
+  else if (act === "t-gcolor") { const gm = o.clothes?.find(x => x.id === key); if (gm) gm.color = el.value; }
+  else if (act === "t-local") { o.localChar = el.checked; if (!el.checked) syncChar(o); store.commit(); return; }
+  clearTimeout(tallerTimer);
+  applyChar(o); store.commit();
+  if (el.type === "range" && /age|headScale/.test(key || "")) renderPanel();
+}
 
 function panelPose() {
   const o = selObj();
@@ -1505,6 +1615,12 @@ function panelPose() {
   h += `<div class="toggles">${toggle("relaxed", "Relajar límites articulares", "Para estilos caricaturescos", o.relaxed, "fig")}
     ${toggle("action", "Línea de acción", "Curva de cabeza a pie de apoyo", store.v.view.action)}
     ${toggle("com", "Centro de masa", "Avisa si la figura de pie pierde el equilibrio", store.v.view.com)}</div>`;
+  if (o.human) {
+    h += `<h3>Cuerpo realista</h3><div class="pills">${["nino", "joven", "adulto", "mujer", "viejo", "heroico"].map(k => pill(k, o.presetKey || "", T.PRESETS[k].label, "t-preset")).join("")}</div>
+      <div class="row"><button class="btn accent" data-act="open-taller">Abrir el Taller de personajes</button></div>`;
+    return h;
+  }
+  h += `<div class="row"><button class="btn accent" data-act="t-real" data-val="on">Usar cuerpo realista</button><button class="btn" data-act="open-taller">Taller</button></div>`;
   h += `<h3>Tipo de cuerpo</h3><div class="pills">${Object.entries(BODY_TYPES).map(([k, b]) => pill(k, o.bodyType || "", b.label, "body-type")).join("")}</div>`;
   h += `<details class="more"><summary>Cuerpo</summary>${slider("height", "Altura", p.height, 100, 210, 1, " cm", "param")}${slider("heads", "Proporción", p.heads, 5, 8.5, 0.1, " cabezas", "param")}
   ${slider("build", "Complexión", p.build, 0, 1, 0.05, "", "param")}${slider("shape", "Forma (masculina ↔ femenina)", p.shape, 0, 1, 0.05, "", "param")}
@@ -1549,6 +1665,7 @@ function setFace(o) {
   o.pose.rot.jaw = [o.face.expr.jaw || 0, 0, 0];
   M.setJoint(fig, "jaw", o.pose.rot.jaw, o.relaxed);
   M.applyFace(fig, o.face);
+  fig.human?.setExpression(o.face.expr);
   markDirty();
 }
 
@@ -1609,6 +1726,10 @@ function panelLuz() {
   ${(() => { const st = myStrokes(); return `<div class="card"><p class="sub"><strong>Tus trazos</strong> · ${st.length ? `${st.length} trazos tuyos guardados` : "todavía no hay"}. Sube una foto de una hoja con trazos sueltos (rayados, líneas, tus criaturas) y el render usará la forma de tu mano.</p>
     ${st.length ? `<div class="strokestrip">${st.slice(0, 12).map(u => `<img src="${u}" alt="">`).join("")}</div><div class="toggles">${toggle("useMine", "Usar mis trazos", "En el render de trazos", ui.useMine !== false, "ui-t")}</div>` : ""}
     <div class="row"><label class="btn filebtn">${ui.strokeBusy ? "Recortando trazos…" : "Subir hoja de trazos"}<input type="file" id="strokefile" accept="image/*" hidden></label>${st.length ? `<button class="btn danger" data-act="strokes-del">Borrar mis trazos</button>` : ""}</div></div>`; })()}
+  ${(() => { const L = learnedStyles(), sel = L[ui.learnedSel ?? 0]; return `<div class="card"><p class="sub"><strong>Estilo aprendido</strong> · Sube de 1 a 6 páginas o dibujos de un mismo artista (tuyos o de quien quieras visualizar). Arnés mide su tinta, papel, grosor, rayado y contorno, y redibuja la viñeta así. No usa IA.</p>
+    ${L.length ? `<div class="pills">${L.map((st, i) => pill(String(i), String(ui.learnedSel ?? 0), st.name, "learned-sel")).join("")}</div>${sel ? `<p class="sub">${describeStyle(sel).map(esc).join(" ")}</p>` : ""}` : ""}
+    <div class="row"><input class="text" id="learnname" placeholder="Nombre del artista o estilo" aria-label="Nombre del estilo"><label class="btn filebtn">${ui.learnBusy ? "Aprendiendo…" : "Aprender de dibujos"}<input type="file" id="learnfile" accept="image/*" multiple hidden></label>${L.length ? `<button class="btn danger" data-act="learned-del">Borrar este estilo</button>` : ""}</div>
+    ${L.length ? `<button class="btn wide accent" data-act="final-learned" ${ui.finalBusy ? "disabled" : ""}>${ui.finalBusy === "learned" ? "Dibujando con su estilo…" : "Render con estilo aprendido"}</button>` : ""}</div>`; })()}
   <button class="btn wide" data-act="final-strokes" ${ui.finalBusy ? "disabled" : ""}>${ui.finalBusy === "strokes" ? "Dibujando trazos…" : "Render de trazos"}</button>
   <p class="sub">El acabado con IA redibuja la viñeta en tu estilo, con una página tuya de referencia y tu clave de Gemini. Conserva composición, poses y luz; cada imagen la paga tu cuenta y puede variar entre intentos.</p>
   <label class="btn wide filebtn">${ref ? "Cambiar página de referencia" : "Elegir página de referencia"}<input type="file" id="reffile" accept="image/*" hidden></label>
@@ -1691,8 +1812,10 @@ panel.addEventListener("click", e => {
   const b = e.target.closest("[data-act]"); if (!b || b.tagName === "INPUT" || b.tagName === "SELECT" || b.tagName === "TEXTAREA") return;
   const act = b.dataset.act, val = b.dataset.val;
   if (/^(pg|pn|bl)-/.test(act)) { pageEd.onClick(act, val); return; }
+  if (/^t-/.test(act)) { tallerClick(act, val, b); return; }
   const o = selObj(), v = store.v;
   switch (act) {
+    case "open-taller": selectTab("taller", false); break;
     case "vineta": storeCamera(); store.project.cur = +val; ui.sel = null; store.commit(); rebuildScene(); renderPanel(); break;
     case "v-dup": storeCamera(); store.duplicateVineta(); store.commit(); rebuildScene(); renderPanel(); toast("Viñeta duplicada con todo su contenido."); break;
     case "v-new": storeCamera(); store.addVineta(); store.commit(); rebuildScene(); renderPanel(); break;
@@ -1830,6 +1953,9 @@ panel.addEventListener("click", e => {
     case "vin-build": { const sc = store.v.read?.scene; if (sc) { buildScene(clone(sc)); toast("Escena armada desde tu dibujo. Ajusta lo que haga falta."); } break; }
     case "read-drop": { const sc = store.v.read?.scene; if (sc) { sc.personajes.splice(+val, 1); store.commit(); renderPanel(); } break; }
     case "final-strokes": finalStrokes(); break;
+    case "final-learned": finalLearned(); break;
+    case "learned-sel": ui.learnedSel = +val; renderPanel(); break;
+    case "learned-del": { const L = learnedStyles(); const [st] = L.splice(ui.learnedSel ?? 0, 1); writeLearned(L); ui.learnedSel = 0; renderPanel(); if (st) toast(`Se borró el estilo «${st.name}».`); break; }
     case "final-ai": finalAI(); break;
     case "ai-forget": writeAi({ model: aiConf().model }); renderPanel(); toast("Se quitó la clave de este dispositivo."); break;
     case "model-look": { const o = selObj(); if (o) { o.params.look = val; rebuildObject(o); store.commit(); renderPanel(); markDirty(3); } break; }
@@ -1843,6 +1969,7 @@ panel.addEventListener("click", e => {
 panel.addEventListener("input", e => {
   const el = e.target, act = el.dataset.act, key = el.dataset.key; if (!act) return;
   if (act === "bl-text") { pageEd.onInput(act, key, 0, el); return; }
+  if (/^t-/.test(act)) { tallerInput(el); return; }
   const val = +el.value, out = document.getElementById(el.id + "-o");
   const o = selObj();
   if (out && el.type === "range") out.textContent = fmt(val, +el.step) + (out.textContent.match(/[^\d.\-]+$/)?.[0] || "");
@@ -1878,9 +2005,18 @@ panel.addEventListener("input", e => {
 });
 panel.addEventListener("change", e => {
   const el = e.target, act = el.dataset.act, key = el.dataset.key;
+  if (/^t-/.test(act)) { tallerChange(el); return; }
   if (el.id === "glbfile") { importGlb(el.files[0]); el.value = ""; return; }
   if (el.id === "calfile") { const f = el.files[0]; el.value = ""; if (f) calibrate(f); return; }
   if (el.dataset.act === "ui-t") { ui[el.dataset.key] = el.checked; return; }
+  if (el.id === "learnfile") {
+    const fs = [...el.files].slice(0, 6); el.value = ""; if (!fs.length) return;
+    const name = $("#learnname")?.value.trim() || `Estilo ${learnedStyles().length + 1}`;
+    ui.learnBusy = true; renderPanel();
+    learnStyle(fs, name).then(p => { const L = learnedStyles().filter(x => x.name !== p.name); L.push(p); writeLearned(L); ui.learnedSel = L.length - 1; toast(`Estilo «${p.name}» aprendido de ${p.pages} dibujo${p.pages > 1 ? "s" : ""}.`); })
+      .catch(e => { console.error(e); toast("No se pudieron leer esos dibujos."); }).finally(() => { ui.learnBusy = false; renderPanel(); });
+    return;
+  }
   if (el.id === "strokefile") { const f = el.files[0]; el.value = ""; if (f) { ui.strokeBusy = true; renderPanel(); extractStrokes(f).then(a => { if (!a.length) toast("No encontré trazos sueltos. Prueba con trazos separados entre sí, en tinta oscura sobre papel claro."); else { writeStrokes([...a, ...myStrokes()].slice(0, 96)); toast(`Se guardaron ${a.length} trazos tuyos.`); } }).catch(() => toast("No se pudo leer esa foto.")).finally(() => { ui.strokeBusy = false; renderPanel(); }); } return; }
   if (el.id === "sheetfile") { const o = selObj(); const fs = [...el.files].slice(0, 3); el.value = ""; if (o && fs.length) Promise.all(fs.map(f => cropToDataUrl(f, [[0, 0], [1, 0], [1, 1], [0, 1]], 640))).then(us => { o.sheets = [...(o.sheets || []), ...us].slice(-3); store.commit(); renderPanel(); toast("Hoja de modelo guardada en este personaje."); }); return; }
   if (el.id === "vinfile") { const f = el.files[0]; el.value = ""; if (f) cropToDataUrl(f, [[0, 0], [1, 0], [1, 1], [0, 1]]).then(u => { store.v.ref = u; delete store.v.read?.scene; store.commit(); renderPanel(); toast("Dibujo de la viñeta listo."); }); return; }
@@ -1975,7 +2111,7 @@ let profTimer = 0;
 function syncProfile() {
   if (!cloud.user()) return;
   clearTimeout(profTimer);
-  profTimer = setTimeout(() => cloud.pushProfile({ expr: savedExpr(), poses: savedPoses(), chars: savedChars(), styles: savedStyles(), strokes: myStrokes() }).catch(() => {}), 1500);
+  profTimer = setTimeout(() => cloud.pushProfile({ expr: savedExpr(), poses: savedPoses(), chars: savedChars(), styles: savedStyles(), strokes: myStrokes(), learned: learnedStyles() }).catch(() => {}), 1500);
 }
 async function mergeProfile() {
   if (!cloud.user()) return;
@@ -1987,7 +2123,8 @@ async function mergeProfile() {
     localStorage.setItem("arnes-chars", JSON.stringify(union(savedChars(), d.chars)));
     localStorage.setItem("arnes-styles", JSON.stringify(union(savedStyles(), d.styles)));
     if (Array.isArray(d.strokes) && !myStrokes().length) localStorage.setItem("arnes-strokes", JSON.stringify(d.strokes.slice(0, 96)));
-    await cloud.pushProfile({ expr: savedExpr(), poses: savedPoses(), chars: savedChars(), styles: savedStyles(), strokes: myStrokes() });
+    if (Array.isArray(d.learned)) { const L = learnedStyles(), names = new Set(L.map(x => x.name)); localStorage.setItem("arnes-learned", JSON.stringify([...L, ...d.learned.filter(x => !names.has(x.name))])); }
+    await cloud.pushProfile({ expr: savedExpr(), poses: savedPoses(), chars: savedChars(), styles: savedStyles(), strokes: myStrokes(), learned: learnedStyles() });
   } catch {}
 }
 function savePose(name, o) {

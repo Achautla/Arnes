@@ -162,3 +162,23 @@ Concepto, módulos, fases y especificación de la Fase 1: https://claude.ai/arti
 - Proyectos viejos con el .glb incrustado se migran solos al abrirlos. «Guardar proyecto» en archivo vuelve a incrustar los modelos para que el archivo abra en cualquier lado.
 - Soporta Draco y Meshopt.
 - Viñetas nuevas (y las creadas desde una foto de página) nacen con luz de día; las viñetas sin luces reciben una luz de cortesía en vez de verse negras.
+
+## Entrega definitiva de la Fase 5 (19-nov): cuerpo realista, manos, Taller y estilo aprendido
+
+- **Cuerpo realista (A):** malla humana de una pieza (MakeHuman, CC0) con 14,500 vértices y 53 huesos, manejada por el esqueleto del maniquí: las poses, la cinemática inversa, los pines y las expresiones de siempre la mueven. Edad (11 a 90 años), sexo, músculo, peso, estatura, 98 controles de cuerpo y rostro, y 34 unidades de expresión (cejas, párpados, boca). Los personajes nuevos nacen con cuerpo realista; el maniquí de madera sigue disponible.
+- **Manos (B):** dedos reales con tres falanges, nudillos y uñas de la malla; las poses de mano de la biblioteca se aplican igual. Nueva pose «Pulgar arriba».
+- **Taller de personajes:** pestaña propia, con fichas enlazadas entre viñetas (opción «solo en esta viñeta»). Secciones: Personajes, Cuerpo, Rostro, Extremidades, Manos, Piel, Cabello, Vestuario y Ficha.
+  - Extremidades: amputaciones con muñón redondeado (mano, antebrazo, codo, brazo, hombro; pie, bajo y sobre la rodilla, cadera), prótesis (gancho, brazo mecánico, pata de palo, lámina deportiva, prótesis moderna), ojos cerrados, con parche o de vidrio, bastón y muleta.
+  - Piel: tonos, pecas, manchas de la edad, lunares, cicatrices, quemaduras, tatuajes, ojeras, barba de tres días, barba, candado y bigote.
+  - Cabello: 12 peinados que nacen del cuero cabelludo, canas y entradas.
+  - Vestuario: camisa, pantalón, saco, gabardina, vestido, falda, rebozo y capa como capas que siguen el cuerpo, más calzado, guantes y el catálogo de accesorios.
+  - Presets editables: seis cuerpos de partida, las variantes del aprendiz (joven; mayor con entradas y parche; mayor con ojo de vidrio) y los seis personajes de prueba.
+- **Estilo aprendido (C):** sube de 1 a 6 dibujos de un artista y Arnés mide su tinta, papel, grosor, rayado, negros y contorno. Con eso redibuja la viñeta: contornos vectorizados con su temblor y rayado con su ritmo, o grabado con su contorno encima si el artista pinta el tono. Sin IA, en el teléfono.
+- **Modelos .glb:** conservan sus texturas, pesan hasta 50 MB y viven fuera del proyecto.
+
+### Pendiente
+- Ropa con pliegues de tela real (hoy las capas siguen el cuerpo, sin arrugas) y mangas vacías en un brazo amputado.
+- Pinceles para esculpir con el dedo y lados izquierdo/derecho por separado.
+- Nariz rota u otras asimetrías del rostro (falta empaquetar las deformaciones asimétricas).
+- Al cambiar un personaje sentado por uno de otra estatura, la pose puede necesitar un reajuste.
+- El bucket «modelos» de Supabase para llevar los .glb a otros dispositivos (requiere tu aprobación).

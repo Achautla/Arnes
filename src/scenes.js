@@ -7,6 +7,8 @@ import * as M from "./mannequin.js";
 import { buildProp } from "./props.js";
 import { buildLight } from "./lights.js";
 import { DEG, paint } from "./util.js";
+import { humanReady, attachHuman, humanDims, loadHuman } from "./human.js";
+import { dressHuman, equipHuman, humanShellAcc } from "./humandress.js";
 
 export const PAPER = 0xf1f0ec, DARK = 0x111214;
 export const ASPECTS = { libre: null, "1:1": 1, "4:3": 4 / 3, "3:4": 3 / 4, "16:9": 16 / 9, "2:1": 2, "1:2": 0.5 };
@@ -29,9 +31,12 @@ export function applyAtmosphere(scene, view) {
 export function buildObject3D(o) {
   let g, fig = null;
   if (o.kind === "figure") {
-    fig = M.buildFigure(o.params);
+    const real = o.human && humanReady();
+    if (o.human && !real) loadHuman().then(() => dispatchEvent(new Event("arnes-model"))).catch(() => {});
+    fig = M.buildFigure(real ? { ...o.params, dims: humanDims(o.human) } : o.params);
     M.applyPose(fig, o.pose, o.relaxed);
     M.applyFace(fig, o.face || M.DEFAULT_FACE);
+    if (real) attachHuman(fig, o.human, o.face || M.DEFAULT_FACE);
     g = fig.root;
     g.position.fromArray(o.pos); g.rotation.set(0, (o.rotY || 0) * DEG, 0);
   } else {
@@ -104,6 +109,14 @@ export function sceneFor(v, { lowEnd = true, mode } = {}) {
     const fig = figs.get(o.id);
     const hair = o.hair && o.hair.style && o.hair.style !== "ninguno";
     const clothes = [...(o.tex === "piel" ? [{ id: "piel", type: "piel", color: o.color || "#c99a76", mat: "piel", ease: 0.15 }] : []), ...(o.clothes || [])];
+    if (fig?.human) {
+      fig.human.setStyle(useColor, o.color, o.hair?.color);
+      const sa = humanShellAcc(o.accessories);
+      fig.dress = dressHuman(fig, o.clothes || [], { hair: o.hair, facial: o.human.facial, footwear: sa.footwear || o.human.footwear, footColor: sa.footColor, gloves: sa.gloves, useColor });
+      if (o.accessories?.length) fig.acc = equipHuman(fig, o.accessories, { useColor }, equip);
+      fig.root.traverse(c => { c.userData.objId = o.id; });
+      continue;
+    }
     if (fig && (clothes.length || hair)) {
       fig.dress = dress(fig, clothes, { obstacles: () => gatherObstacles([...world.values()], [...figs.values()], fig.root), hair: o.hair, quality: lowEnd ? "media" : (view.clothQ || "alta"), useColor, map: !!view.tension, wind: view.wind || 0, windDir: view.windDir || 0 });
     }
