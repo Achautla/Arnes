@@ -2,6 +2,12 @@
 
 Storyboard 3D para cómic: posar personajes, colocar cámaras y luces, y obtener un semirender (volumen, sombras y valores) para dibujar a lápiz.
 
+## Fase 4 · render final (18-nov)
+
+- **Render de trazos:** la viñeta se dibuja con trazos sueltos de plumilla (decenas de miles), que siguen el flujo de la forma, se afinan en las puntas, cambian de presión y se cruzan en la sombra. Render final a 1800 px.
+- **Acabado con IA:** el render y una página del artista se envían a un modelo de imagen de Gemini (por defecto `gemini-3.1-flash-image`) con la clave del artista, para redibujar la viñeta en su estilo conservando composición, poses y luz.
+- **Piel:** los personajes pueden pasar de madera a piel, con seis tonos, brillo suave y poro fino.
+
 ## Fase 4 · detalles de render y pintura (18-nov)
 
 - **Texturas de superficie** por objeto: madera, ladrillo, follaje, piedra, tela y metal gastado. Los estilos de artista las entintan como juntas, vetas, hojas y grietas (control «Detalle de texturas»).

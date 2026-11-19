@@ -15,7 +15,7 @@ uniform vec4 th;
 uniform bool outline, blue, clearBg, useNormal, contourOnly;
 uniform float dotSize, hatch, grain, lineVar, detail;
 uniform vec3 ink, blueInk, paper, sepia, burstA, burstB, shadeTint, lightTint;
-uniform bool burst;
+uniform bool burst, noHatch;
 uniform vec2 focus;
 uniform int fxType;
 uniform float fxAmt, fxAng, fisheye;
@@ -170,6 +170,7 @@ void main(){
       float stip = sky ? 0.0 : step(hash(floor(px / 1.6)), clamp((0.86 - L) * 0.35, 0.0, 0.12)) * step(0.55, L);
       cov = max(cov, stip * 0.8);
       float solid = smoothstep(0.12, 0.06, L);
+      if (noHatch) cov = 0.0;
       cov = max(cov, solid);
       if (sky) cov *= 0.85;
       float inkV = max(cov, line);
@@ -291,7 +292,7 @@ export class Composer {
         outline: { value: false }, contourOnly: { value: false }, blue: { value: false }, clearBg: { value: false }, useNormal: { value: true },
         ink: { value: new THREE.Color(0.11, 0.11, 0.12) }, blueInk: { value: new THREE.Color(0.25, 0.55, 0.85) },
         hatch: { value: 5 }, detail: { value: 0.6 }, grain: { value: 0.6 }, lineVar: { value: 0.7 }, paper: { value: new THREE.Color("#e6d3ae") }, sepia: { value: new THREE.Color("#2a1d12") },
-        shadeTint: { value: new THREE.Color("#1f3550") }, lightTint: { value: new THREE.Color("#d8ecff") }, burst: { value: true }, burstA: { value: new THREE.Color("#ffb36b") }, burstB: { value: new THREE.Color("#d23c35") }, focus: { value: new THREE.Vector2(0.5, 0.55) }, fxType: { value: 0 }, fxAmt: { value: 0 }, fxAng: { value: 0 }, fisheye: { value: 0 }, fxInk: { value: new THREE.Color(0.08, 0.07, 0.07) },
+        shadeTint: { value: new THREE.Color("#1f3550") }, lightTint: { value: new THREE.Color("#d8ecff") }, noHatch: { value: false }, burst: { value: true }, burstA: { value: new THREE.Color("#ffb36b") }, burstB: { value: new THREE.Color("#d23c35") }, focus: { value: new THREE.Vector2(0.5, 0.55) }, fxType: { value: 0 }, fxAmt: { value: 0 }, fxAng: { value: 0 }, fisheye: { value: 0 }, fxInk: { value: new THREE.Color(0.08, 0.07, 0.07) },
       },
     });
     this.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.mat);
@@ -345,7 +346,7 @@ export class Composer {
     u.grain.value = view.grain ?? 0.6; u.detail.value = view.detail ?? 0.6; u.lineVar.value = view.lineVar ?? 0.6;
     u.paper.value.set(view.paper || "#e6d3ae"); u.sepia.value.set(view.sepia || "#2a1d12");
     u.shadeTint.value.set(view.shadeTint || "#1f3550"); u.lightTint.value.set(view.lightTint || "#d8ecff");
-    u.burst.value = view.burst !== false; u.burstA.value.set(view.burstA || "#ffb36b"); u.burstB.value.set(view.burstB || "#d23c35");
+    u.burst.value = view.burst !== false; u.noHatch.value = !!opts.noHatch; u.burstA.value.set(view.burstA || "#ffb36b"); u.burstB.value.set(view.burstB || "#d23c35");
     u.fxType.value = FX_INDEX[view.fx] || 0; u.fxAmt.value = view.fxAmt ?? 0.6; u.fxAng.value = (view.fxAng || 0) * Math.PI / 180;
     u.fisheye.value = view.fisheye || 0; u.focus.value.set(view.focusX ?? 0.5, view.focusY ?? 0.55);
     u.fxInk.value.set(view.mode === "grabado" ? (view.sepia || "#2a1d12") : "#141212");

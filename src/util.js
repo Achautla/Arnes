@@ -55,7 +55,8 @@ export function colorMat(hex) {
 // Texturas de superficie: dibujan detalle en el valor (vetas, juntas, hojas, grietas) para que cada
 // estilo lo interprete: el grabado lo convierte en rayado, el color dinámico en manchas planas.
 export const TEXTURES = { lisa: "Lisa", madera: "Madera", ladrillo: "Ladrillo", follaje: "Follaje", piedra: "Piedra", tejido: "Tela o tejido", metal: "Metal gastado" };
-const TEX_ID = { madera: 1, ladrillo: 2, follaje: 3, piedra: 4, tejido: 5, metal: 6 };
+const TEX_ID = { madera: 1, ladrillo: 2, follaje: 3, piedra: 4, tejido: 5, metal: 6, piel: 7 };
+export const SKIN_TONES = { "#f0d0b8": "Muy clara", "#e2b593": "Clara", "#c99a76": "Media", "#a6744f": "Morena", "#7a5038": "Oscura", "#563628": "Muy oscura" };
 const texGLSL = `
 varying vec3 vWPos; varying vec3 vWN; uniform int texKind; uniform float texScale;
 float th(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -95,13 +96,19 @@ float texPattern(){
     float sc = smoothstep(0.92, 1.0, tn(vec2(uv.x * 200.0, uv.y * 4.0)));
     return mix(0.75, 1.0, tf(uv * 5.0)) * (1.0 - sc * 0.35);
   }
+  if (texKind == 7) { // piel: manchas suaves y poro fino, sin vetas de madera
+    float mott = tf(uv * 9.0), pore = tn(uv * 380.0);
+    return mix(0.92, 1.0, mott) * (1.0 - pore * 0.05);
+  }
   return 1.0;
 }`;
 const texCache = new Map();
 export function texturedMat(hex, kind) {
   const key = (hex || "clay") + "|" + kind;
   if (texCache.has(key)) return texCache.get(key);
-  const m = new THREE.MeshStandardMaterial({ color: new THREE.Color(hex || 0xbdb6ac), roughness: kind === "metal" ? 0.5 : 0.86, metalness: kind === "metal" ? 0.25 : 0 });
+  const m = kind === "piel"
+    ? new THREE.MeshPhysicalMaterial({ color: new THREE.Color(hex || 0xc99a76), roughness: 0.55, metalness: 0, sheen: 0.35, sheenRoughness: 0.6, sheenColor: new THREE.Color(0xff9a80), clearcoat: 0.06, clearcoatRoughness: 0.6 })
+    : new THREE.MeshStandardMaterial({ color: new THREE.Color(hex || 0xbdb6ac), roughness: kind === "metal" ? 0.5 : 0.86, metalness: kind === "metal" ? 0.25 : 0 });
   m.onBeforeCompile = sh => {
     sh.uniforms.texKind = { value: TEX_ID[kind] || 0 }; sh.uniforms.texScale = { value: 1 };
     sh.vertexShader = "varying vec3 vWPos; varying vec3 vWN;\n" + sh.vertexShader.replace("#include <worldpos_vertex>", "#include <worldpos_vertex>\n vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz; vWN = mat3(modelMatrix) * objectNormal;");
@@ -117,6 +124,6 @@ export function paint(root, hex, useColor = true, tex = null) {
     if (!m.isMesh) return;
     if (m.userData.baseMat === undefined) { if (m.material !== clay) return; m.userData.baseMat = clay; }
     const c = hex && useColor ? hex : null;
-    m.material = t ? texturedMat(c, t) : c ? colorMat(c) : m.userData.baseMat;
+    m.material = t ? texturedMat(t === "piel" ? hex : c, t) : c ? colorMat(c) : m.userData.baseMat;
   });
 }

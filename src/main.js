@@ -2,7 +2,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
-import { DEG, RAD, clamp, uid, clone, round, escapeHtml as esc, saveFile, kelvinToColor as kelvinColor, paint, TEXTURES } from "./util.js";
+import { DEG, RAD, clamp, uid, clone, round, escapeHtml as esc, saveFile, kelvinToColor as kelvinColor, paint, TEXTURES, SKIN_TONES } from "./util.js";
 import * as M from "./mannequin.js";
 import { POSE_LIBRARY, POSE_CATS } from "./poses.js";
 import { PRIMITIVES, PROPS, EXTRA_PROPS, TERRAIN, TERRAIN_TYPES, ALL_PROPS, buildProp } from "./props.js";
@@ -20,6 +20,7 @@ import { dress, GARMENTS, MATERIALS, FOLD_TYPES, newGarment, HAIR_STYLES } from 
 import { equip, ACCESSORIES, MATERIALS as ACC_MATS, FINGER_NAMES, newAccessory } from "./accessories.js";
 import * as cloud from "./cloud.js";
 import { analyzeLocal, analyzeAI, AI_DEFAULT_MODEL } from "./calibrate.js";
+import { drawStrokes, aiFinish, AI_IMAGE_MODEL } from "./strokes.js";
 
 const PAPER = 0xf1f0ec, DARK = 0x111214, BLUE = 0x7cc0ea, BLUE_DEEP = 0x3e7fb0;
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -921,6 +922,8 @@ function propsOf(o) {
     h += `<div class="nums">${num("scale", "Escala", Math.round((o.scale?.[0] ?? 1) * 100), "%")}</div>`;
   }
   if (isFig) h += clothesPanel(o);
+  if (isFig) h += `<h3>Superficie</h3><div class="pills">${pill("madera", o.tex === "piel" ? "piel" : "madera", "Madera (maniquí)", "fig-skin")}${pill("piel", o.tex === "piel" ? "piel" : "madera", "Piel", "fig-skin")}</div>`
+    + (o.tex === "piel" ? `<div class="pills">${Object.entries(SKIN_TONES).map(([k, l]) => `<button class="pill${o.color === k ? " on" : ""}" data-act="fig-tone" data-val="${k}" aria-pressed="${o.color === k}"><span class="sw" style="background:${k}"></span>${l}</button>`).join("")}</div><p class="sub">La piel se ve en todos los estilos de color y en la pintura; el grabado la lee como valor. Por ahora el cuerpo sigue armado por piezas: el cuerpo continuo llega en la Fase 5.</p>` : "");
   if (!isFig && o.type !== "humo") h += `<h3>Textura</h3><div class="pills">${Object.entries(TEXTURES).map(([k, l]) => pill(k, o.tex || "lisa", l, "obj-tex")).join("")}</div>`;
   h += `<div class="row colorrow"><label class="sel"><span>${isFig ? "Color de la piel o del maniquí" : "Color (para estilos de color y para separar planos)"}</span><input type="color" data-act="obj-color" value="${o.color || "#bdb6ac"}"></label>${o.color ? `<button class="btn" data-act="obj-nocolor">Quitar color</button>` : ""}</div>`;
   h += `<div class="row"><button class="btn" data-act="dup">Duplicar</button><button class="btn" data-act="fwd">Copiar a viñetas siguientes</button><button class="btn danger" data-act="del">Borrar</button></div></div>`;
@@ -1016,6 +1019,58 @@ $("#drill-pause").addEventListener("click", () => { if (drill) { drill.paused = 
 $("#drill-end").addEventListener("click", () => endDrill(false));
 $("#drill-keep").addEventListener("click", () => endDrill(false, true));
 
+function refImage() { try { return localStorage.getItem("arnes-ref") || ""; } catch { return ""; } }
+async function setRefImage(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
+    const k = Math.min(1, 1024 / Math.max(img.width, img.height)), c = document.createElement("canvas");
+    c.width = Math.round(img.width * k); c.height = Math.round(img.height * k); c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    try { localStorage.setItem("arnes-ref", c.toDataURL("image/jpeg", 0.82)); } catch { toast("No cupo la referencia en este dispositivo. Prueba una imagen más pequeña."); }
+    renderPanel(); toast("Página de referencia lista.");
+  } catch { toast("No se pudo abrir esa imagen. Prueba con JPG o PNG."); } finally { URL.revokeObjectURL(url); }
+}
+let finalBlobUrl = "";
+function showFinal(src, note) {
+  $("#final-img").src = src; $("#final-s").textContent = note; $("#final").hidden = false; $("#final-close").focus();
+}
+$("#final-close").onclick = () => { $("#final").hidden = true; };
+$("#final-save").onclick = async () => {
+  const src = $("#final-img").src; if (!src) return;
+  const blob = await (await fetch(src)).blob();
+  toast(await resultMsg(saveFile(`${slug(store.v.name)}-final.png`, blob)));
+};
+function finalSize(max = 1800) { const A = frameAspect(); return A >= 1 ? [max, Math.round(max / A)] : [Math.round(max * A), max]; }
+async function finalStrokes() {
+  ui.finalBusy = "strokes"; renderPanel();
+  try {
+    const v = store.v.view, [w, h] = finalSize(1800);
+    const sv = { ...clone(v), mode: "grabado", outline: v.outline !== false, fx: v.fx };
+    if (v.mode !== "grabado") Object.assign(sv, { paper: v.paper || "#ebdfc6", sepia: v.sepia || "#1e1610", grain: v.grain ?? 0.5 });
+    const toneView = { ...clone(v), mode: "clay", outline: false, fx: "ninguno" };
+    const { canvas: base } = await withExportScene(() => renderToBlob(renderer, composer, scene, exportCamera(), sv, w, h, { noHatch: true }, [grid, ruler]));
+    const { canvas: tone } = await withExportScene(() => renderToBlob(renderer, composer, scene, exportCamera(), toneView, Math.round(w / 2), Math.round(h / 2), {}, [grid, ruler]));
+    // el umbral del estilo desplaza el tono: más sombra → más trazos
+    const shift = ((sv.th ?? 0.5) - 0.5) * 0.5;
+    if (shift) { const g = tone.getContext("2d"), d = g.getImageData(0, 0, tone.width, tone.height); for (let i = 0; i < d.data.length; i += 4) for (let k = 0; k < 3; k++) d.data[i + k] = Math.max(0, Math.min(255, d.data[i + k] * (1 - shift * 1.6))); g.putImageData(d, 0, 0); }
+    const { canvas, strokes } = await drawStrokes(base, tone, { ink: sv.sepia || "#2a1d12", spacing: Math.max(3, (sv.hatch || 5) * 0.8), lineVar: sv.lineVar ?? 0.7, seed: 7 });
+    showFinal(canvas.toDataURL("image/png"), `${strokes.toLocaleString("es-MX")} trazos a ${w} × ${h} px, con la tinta y el papel de tu estilo.`);
+  } catch (e) { toast("No se pudo hacer el render de trazos. Intenta con menos objetos o en una computadora."); console.error(e); }
+  ui.finalBusy = null; renderPanel();
+}
+async function finalAI() {
+  const ai = aiConf();
+  if (!ai.key) { toast("Primero pon tu clave de Gemini en «IA para calibrar»."); return; }
+  if (!cloud.reachable()) { toast("El acabado con IA funciona en la versión de GitHub Pages."); return; }
+  ui.finalBusy = "ai"; renderPanel();
+  try {
+    const [w, h] = finalSize(1280);
+    const { canvas } = await withExportScene(() => renderToBlob(renderer, composer, scene, exportCamera(), store.v.view, w, h, {}, [grid, ruler]));
+    const src = await aiFinish(canvas, refImage(), ai);
+    showFinal(src, refImage() ? "Acabado con IA usando tu página de referencia. Si no te convence, vuelve a intentarlo: cada intento sale distinto." : "Acabado con IA sin referencia. Elige una página tuya para que copie tu estilo.");
+  } catch (e) { toast(e.message || "Gemini no pudo hacer el acabado."); }
+  ui.finalBusy = null; renderPanel();
+}
 function aiConf() { try { return JSON.parse(localStorage.getItem("arnes-ai") || "{}"); } catch { return {}; } }
 function writeAi(o) { try { localStorage.setItem("arnes-ai", JSON.stringify(o)); } catch {} }
 async function calibrate(file) {
@@ -1224,14 +1279,22 @@ function panelLuz() {
   ${mine.length ? `<div class="pills"><span class="pl">Borrar</span>${mine.map((st, i) => `<button class="pill" data-act="style-del" data-val="${i}">${esc(st.name)} ×</button>`).join("")}</div>` : ""}
   <div class="row"><input class="text" id="stylename" placeholder="Nombre del estilo" aria-label="Nombre del estilo"><button class="btn" data-act="style-save">Guardar este estilo</button></div>
   <p class="sub">Tus estilos viajan con tu cuenta. Puedes tener varios y aplicarlos a cualquier viñeta.</p>`;
-  const ai = aiConf();
+  const ai = aiConf(), ref = refImage();
+  h += `<h3>Render final</h3><p class="sub">El render de trazos dibuja la viñeta con trazos sueltos de plumilla que siguen la forma, se afinan en las puntas y se cruzan en la sombra. Tarda unos segundos.</p>
+  <button class="btn wide" data-act="final-strokes" ${ui.finalBusy ? "disabled" : ""}>${ui.finalBusy === "strokes" ? "Dibujando trazos…" : "Render de trazos"}</button>
+  <p class="sub">El acabado con IA redibuja la viñeta en tu estilo, con una página tuya de referencia y tu clave de Gemini. Conserva composición, poses y luz; cada imagen la paga tu cuenta y puede variar entre intentos.</p>
+  <label class="btn wide filebtn">${ref ? "Cambiar página de referencia" : "Elegir página de referencia"}<input type="file" id="reffile" accept="image/*" hidden></label>
+  ${ref ? `<img class="refthumb" src="${ref}" alt="Página de referencia">` : ""}
+  <button class="btn wide accent" data-act="final-ai" ${ui.finalBusy || !ai.key ? "disabled" : ""}>${ui.finalBusy === "ai" ? "Gemini está dibujando…" : "Acabado con IA"}</button>
+  ${ai.key ? "" : `<p class="sub">Para el acabado con IA, pon tu clave en «IA para calibrar», abajo.</p>`}`;
   h += `<h3>Calibrar desde una página tuya</h3><p class="sub">Sube una foto o escaneo de una página entintada. Arnés lee el papel, la tinta, la mancha de negro y el rayado, y crea un estilo nuevo con eso.</p>
   <label class="btn wide filebtn">${ui.calBusy ? "Leyendo la página…" : "Elegir página"}<input type="file" id="calfile" accept="image/*" hidden ${ui.calBusy ? "disabled" : ""}></label>
   ${ui.calReport ? `<div class="card calrep">${ui.calReport.map(l => `<p class="sub">${esc(l)}</p>`).join("")}</div>` : ""}
   <details class="more"${ai.key ? "" : ""}><summary>IA para calibrar (opcional, con tu clave)</summary>
     <p class="sub">Con una clave de Gemini la lectura es más fina y te describe tu trazo. La clave se guarda solo en este dispositivo y cada uso lo paga tu cuenta de Google.${cloud.reachable() ? "" : " La IA funciona en la versión de GitHub Pages."}</p>
     <label class="fld"><span>Clave de Gemini</span><input class="text" type="password" data-act="ai-key" value="${esc(ai.key || "")}" placeholder="Pégala desde Google AI Studio" autocomplete="off"></label>
-    <label class="fld"><span>Modelo</span><input class="text" data-act="ai-model" value="${esc(ai.model || AI_DEFAULT_MODEL)}"></label>
+    <label class="fld"><span>Modelo para leer</span><input class="text" data-act="ai-model" value="${esc(ai.model || AI_DEFAULT_MODEL)}"></label>
+    <label class="fld"><span>Modelo de imagen (acabado)</span><input class="text" data-act="ai-imodel" value="${esc(ai.imageModel || AI_IMAGE_MODEL)}"></label>
     ${ai.key ? `<button class="btn" data-act="ai-forget">Quitar la clave de este dispositivo</button>` : ""}
   </details>`;
   if (v.mode === "luz") h += `<ul class="legend">${LIGHT_NOTES.map(([l, c]) => `<li><i style="background:${c}"></i>${l}</li>`).join("")}</ul>
@@ -1422,6 +1485,10 @@ panel.addEventListener("click", e => {
       const list = savedStyles().filter(x => x.name !== name); list.push({ name, view }); writeStyles(list); renderPanel(); toast(`Se guardó «${name}» en tus estilos.`); break;
     }
     case "style-del": { const list = savedStyles(); const [st] = list.splice(+val, 1); writeStyles(list); renderPanel(); if (st) toast(`Se borró «${st.name}».`); break; }
+    case "fig-skin": { const o = selObj(); if (!o) break; if (val === "piel") { o.tex = "piel"; if (!o.color || !SKIN_TONES[o.color]) o.color = "#c99a76"; } else { delete o.tex; } paint(world.get(o.id), o.color || null, !["clay", "grabado"].includes(v.view.mode) || o.tex === "piel", o.tex); store.commit(); renderPanel(); markDirty(); break; }
+    case "fig-tone": { const o = selObj(); if (!o) break; o.color = val; paint(world.get(o.id), val, true, o.tex); store.commit(); renderPanel(); markDirty(); break; }
+    case "final-strokes": finalStrokes(); break;
+    case "final-ai": finalAI(); break;
     case "ai-forget": writeAi({ model: aiConf().model }); renderPanel(); toast("Se quitó la clave de este dispositivo."); break;
     case "obj-tex": { const o = selObj(); if (o) { if (val === "lisa") delete o.tex; else o.tex = val; paint(world.get(o.id), o.color || null, !["clay", "grabado"].includes(v.view.mode), o.tex); store.commit(); renderPanel(); markDirty(); } break; }
     case "smoke-tone": { const o = selObj(); if (o) { o.params.tono = val; rebuildObject(o); store.commit(); renderPanel(); markDirty(); } break; }
@@ -1468,7 +1535,8 @@ panel.addEventListener("change", e => {
   const el = e.target, act = el.dataset.act, key = el.dataset.key;
   if (el.id === "glbfile") { importGlb(el.files[0]); el.value = ""; return; }
   if (el.id === "calfile") { const f = el.files[0]; el.value = ""; if (f) calibrate(f); return; }
-  if (el.dataset.act === "ai-key" || el.dataset.act === "ai-model") { const a = aiConf(); a[el.dataset.act === "ai-key" ? "key" : "model"] = el.value.trim(); writeAi(a); renderPanel(); toast(el.dataset.act === "ai-key" ? "Clave guardada solo en este dispositivo." : "Modelo guardado."); return; }
+  if (el.id === "reffile") { const f = el.files[0]; el.value = ""; if (f) setRefImage(f); return; }
+  if (el.dataset.act === "ai-key" || el.dataset.act === "ai-model" || el.dataset.act === "ai-imodel") { const a = aiConf(); a[{ "ai-key": "key", "ai-model": "model", "ai-imodel": "imageModel" }[el.dataset.act]] = el.value.trim(); writeAi(a); renderPanel(); toast(el.dataset.act === "ai-key" ? "Clave guardada solo en este dispositivo." : "Modelo guardado."); return; }
   if (!act) return;
   const o = selObj(), v = store.v;
   if (pageEd.onChangeEl(act, el)) return;
