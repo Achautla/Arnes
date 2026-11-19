@@ -114,7 +114,7 @@ export async function analyzeAI(canvas, { key, model }, local) {
     if (r.status === 400 && /api key/i.test(m)) throw new Error("Gemini no aceptó la clave. Revísala en Google AI Studio y vuelve a pegarla.");
     if (r.status === 404) throw new Error(`Gemini no encontró el modelo «${model}». Prueba con ${AI_DEFAULT_MODEL}.`);
     if (r.status === 429) throw new Error("Se acabó tu cuota de Gemini por ahora. Espera unos minutos o revisa tu plan en Google AI Studio.");
-    throw new Error("Gemini no respondió. Se usó solo la lectura local.");
+    throw new Error("Gemini no respondió" + (m ? ": " + m.slice(0, 160) : "") + ". Se usó solo la lectura local.");
   }
   const txt = j.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "";
   let o; try { o = JSON.parse(txt.replace(/^```(json)?|```$/g, "").trim()); } catch { throw new Error("Gemini respondió algo que no se pudo leer. Se usó solo la lectura local."); }

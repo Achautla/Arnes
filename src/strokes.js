@@ -140,8 +140,10 @@ export async function aiFinish(render, refDataUrl, { key, imageModel }, notes = 
   if (!r.ok) {
     if (r.status === 400 && /api key/i.test(j.error?.message || "")) throw new Error("Gemini no aceptó la clave. Revísala en Google AI Studio.");
     if (r.status === 404) throw new Error(`Gemini no encontró el modelo de imagen «${imageModel}». Prueba con ${AI_IMAGE_MODEL}.`);
-    if (r.status === 429) throw new Error("Se acabó tu cuota de imágenes de Gemini por ahora. Espera o revisa tu plan.");
-    throw new Error("Gemini no pudo hacer el acabado. Intenta de nuevo en un momento.");
+    const raw = (j.error?.message || "").slice(0, 180);
+    if (r.status === 429 && /limit: 0|free_tier/i.test(raw)) throw new Error("Tu clave está en el nivel gratuito, y los modelos que dibujan imágenes no tienen cuota gratis. Para el acabado con IA hay que activar la facturación en Google AI Studio. Leer dibujos y calibrar sí siguen siendo gratis.");
+    if (r.status === 429) throw new Error("Se acabó tu cuota de imágenes de Gemini por ahora. Espera o revisa tu plan. (" + raw + ")");
+    throw new Error("Gemini no pudo hacer el acabado: " + (raw || "error " + r.status));
   }
   const img = j.candidates?.[0]?.content?.parts?.find(p => p.inline_data || p.inlineData);
   const data = img && (img.inline_data || img.inlineData);
