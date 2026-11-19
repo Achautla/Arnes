@@ -10,7 +10,9 @@ export function loadHuman() {
   return loading ??= (async () => {
     const [meta, buf] = await Promise.all([
       fetch(BASE + "human.json").then(r => { if (!r.ok) throw new Error("human.json " + r.status); return r.json(); }),
-      fetch(BASE + "human.bin").then(r => { if (!r.ok) throw new Error("human.bin " + r.status); return r.arrayBuffer(); }),
+      // el binario; donde no se puede servir un .bin (vista previa en claude.ai) va en base64 dentro de un JSON
+      fetch(BASE + "human.bin").then(r => { if (!r.ok) throw new Error("human.bin " + r.status); return r.arrayBuffer(); })
+        .catch(() => fetch(BASE + "human-bin.json").then(r => r.json()).then(j => { const s = atob(j.b64), u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return u.buffer; })),
     ]);
     const part = (k, T) => { const [o, n] = meta.parts[k]; return new T(buf, o, n / T.BYTES_PER_ELEMENT); };
     H = {
