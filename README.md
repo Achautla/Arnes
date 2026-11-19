@@ -154,3 +154,11 @@ Proyecto de Supabase «Arnes» (`nokiuqisqrbvdxdotkkk`): tablas `projects` y `pr
 ## Documento del proyecto
 
 Concepto, módulos, fases y especificación de la Fase 1: https://claude.ai/artifact/KpJZYWdoGxxFWh6o1vAJ3e
+
+## Modelos .glb importados (19-nov)
+
+- Conservan sus colores y texturas; «Arcilla» es una opción por objeto («Aspecto del modelo»).
+- Hasta 50 MB. El archivo se guarda aparte (IndexedDB del dispositivo y, con cuenta, en Storage `modelos/<usuario>/<huella>.glb`); el proyecto solo guarda `glb:<huella>`.
+- Proyectos viejos con el .glb incrustado se migran solos al abrirlos. «Guardar proyecto» en archivo vuelve a incrustar los modelos para que el archivo abra en cualquier lado.
+- Soporta Draco y Meshopt.
+- Viñetas nuevas (y las creadas desde una foto de página) nacen con luz de día; las viñetas sin luces reciben una luz de cortesía en vez de verse negras.

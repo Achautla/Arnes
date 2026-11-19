@@ -1,23 +1,47 @@
 // Primitivas y utilería, todo en metros y construido con volúmenes simples
 import * as THREE from "three";
-import { clay } from "./util.js";
+import { clay, paint } from "./util.js";
+import { getModel } from "./models.js";
 import { EXTRA_PROPS, TERRAIN, buildExtra } from "./props2.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
+import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 
-// Modelos importados (.glb): se guardan en el proyecto como data URL y se convierten a arcilla
+// Modelos importados (.glb): conservan sus materiales y texturas; «Arcilla» es opcional.
+// El archivo vive aparte (models.js); los proyectos viejos traen el .glb como data URL.
 const models = new Map(); // src → Promise<Group>
-function loadModel(src) {
-  if (!models.has(src)) models.set(src, new Promise((res, rej) => {
-    new GLTFLoader().load(src, gltf => {
-      const root = gltf.scene;
-      const box = new THREE.Box3().setFromObject(root), size = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
-      root.position.set(-c.x, -box.min.y, -c.z); // centrado y apoyado en el piso
-      root.traverse(m => { if (m.isMesh) { m.material = clay; m.castShadow = m.receiveShadow = true; } });
-      const wrap = new THREE.Group(); wrap.add(root); wrap.userData.size = size; res(wrap);
-    }, undefined, rej);
-  }));
+let loader = null;
+function gltfLoader() {
+  if (loader) return loader;
+  loader = new GLTFLoader();
+  const draco = new DRACOLoader(); draco.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
+  loader.setDRACOLoader(draco); loader.setMeshoptDecoder(MeshoptDecoder);
+  return loader;
+}
+function loadModel(src, owner) {
+  if (!models.has(src)) models.set(src, (async () => {
+    const buf = src.startsWith("glb:") ? await (await getModel(src.slice(4), owner)).arrayBuffer() : await (await fetch(src)).arrayBuffer();
+    const gltf = await new Promise((res, rej) => gltfLoader().parse(buf, "", res, rej));
+    const root = gltf.scene;
+    root.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(root), size = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
+    root.position.set(-c.x, -box.min.y, -c.z); // centrado y apoyado en el piso
+    root.traverse(m => {
+      if (!m.isMesh) return;
+      m.castShadow = m.receiveShadow = true;
+      for (const mt of [].concat(m.material)) {
+        // Materiales sin luz (KHR_materials_unlit) o sin normales se ven planos o negros: pásalos a estándar
+        if (mt.isMeshBasicMaterial) { const n = new THREE.MeshStandardMaterial({ color: mt.color, map: mt.map, transparent: mt.transparent, opacity: mt.opacity, side: mt.side, roughness: 0.8 }); m.material = Array.isArray(m.material) ? m.material.map(x => x === mt ? n : x) : n; }
+        if (mt.map) mt.map.anisotropy = 4;
+      }
+      if (!m.geometry.attributes.normal) m.geometry.computeVertexNormals();
+    });
+    const wrap = new THREE.Group(); wrap.add(root); wrap.userData.size = [size.x, size.y, size.z];
+    return wrap;
+  })().catch(e => { models.delete(src); throw e; }));
   return models.get(src);
 }
+
 export const modelReady = src => models.has(src);
 export { EXTRA_PROPS, TERRAIN, TERRAIN_TYPES } from "./props2.js";
 
@@ -60,11 +84,17 @@ export function buildProp(type, p = {}) {
   switch (type) {
     case "modelo": {
       const ph = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), clay); ph.position.y = 0.15; g.add(ph);
-      if (p.src) loadModel(p.src).then(m => {
+      if (p.src) loadModel(p.src, p.owner).then(m => {
         g.remove(ph); const c = m.clone(true);
-        c.traverse(x => { x.userData.objId = g.userData.objId; }); g.add(c);
+        const asClay = p.look === "arcilla";
+        c.traverse(x => {
+          x.userData.objId = g.userData.objId;
+          if (x.isMesh) { x.userData.origMat = x.material; x.userData.look = asClay ? "arcilla" : "original"; if (asClay) x.material = clay; }
+        });
+        g.add(c);
+        if (g.userData.paintArgs) paint(g, ...g.userData.paintArgs);
         dispatchEvent(new CustomEvent("arnes-model", { detail: g.userData.objId }));
-      }).catch(() => dispatchEvent(new CustomEvent("arnes-model-failed")));
+      }).catch(e => { console.warn(e); dispatchEvent(new CustomEvent("arnes-model-failed", { detail: String(e.message || e) })); });
       break;
     }
     case "caja": box(g, cm(p.ancho), cm(p.alto), cm(p.fondo), 0, cm(p.alto) / 2, 0); break;

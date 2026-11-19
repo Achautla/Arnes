@@ -21,6 +21,7 @@ import { gatherObstacles, deformSkin, resetSkin } from "./contact.js";
 import { dress, GARMENTS, MATERIALS, FOLD_TYPES, newGarment, HAIR_STYLES, CLOTH_TEX } from "./cloth.js";
 import { equip, ACCESSORIES, MATERIALS as ACC_MATS, FINGER_NAMES, newAccessory } from "./accessories.js";
 import * as cloud from "./cloud.js";
+import { putModel, syncUp as modelSyncUp, MAX_MODEL, externalizeModels, inlineModels } from "./models.js";
 import { analyzeLocal, analyzeAI, AI_DEFAULT_MODEL } from "./calibrate.js";
 import { drawStrokes, aiFinish, AI_IMAGE_MODEL, extractStrokes, loadBrushes } from "./strokes.js";
 import { makeVideo } from "./video.js";
@@ -196,6 +197,10 @@ function disposeTree() { /* las geometrías se comparten entre figuras: no se li
 function rebuildLights() {
   lightGroup.clear(); iconGroup.clear(); lights.clear();
   const low = coarse;
+  if (!store.v.lights.length) { // sin luces todo se vería negro: luz de cortesía, no se guarda
+    const amb = new THREE.HemisphereLight(0xffffff, 0x8a8070, 1.1), sun = new THREE.DirectionalLight(0xffffff, 1.4);
+    sun.position.set(3, 6, 4); lightGroup.add(amb, sun);
+  }
   for (const def of store.v.lights) {
     const light = buildLight(def, low);
     lightGroup.add(light); if (light.target) lightGroup.add(light.target);
@@ -746,15 +751,27 @@ function addProp(type) {
 }
 async function importGlb(f) {
   if (!f) return;
-  if (f.size > 8e6) { toast("El modelo pesa más de 8 MB: simplifícalo antes de importarlo."); return; }
-  const src = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(f); });
+  if (f.size > MAX_MODEL) { toast(`El modelo pesa ${Math.round(f.size / 1e6)} MB; el máximo es ${MAX_MODEL / 1e6} MB. Reduce sus texturas (por ejemplo a 2048 px) y vuelve a exportarlo.`); return; }
+  let id;
+  try { id = await putModel(f); } catch { toast("Este navegador no dejó guardar el modelo. Libera espacio o prueba en otro navegador."); return; }
   const t = controls.target;
-  const o = { id: uid("p"), kind: "prop", type: "modelo", name: f.name.replace(/\.(glb|gltf)$/i, ""), pos: [round(t.x, 2), 0, round(t.z, 2)], rot: [0, 0, 0], scale: [1, 1, 1], params: { src } };
+  const o = { id: uid("p"), kind: "prop", type: "modelo", name: f.name.replace(/\.(glb|gltf)$/i, ""), pos: [round(t.x, 2), 0, round(t.z, 2)], rot: [0, 0, 0], scale: [1, 1, 1], params: { src: "glb:" + id, owner: cloud.user()?.id || null, look: "original" } };
   store.v.objects.push(o); buildObject(o); store.commit(); select(o.id);
-  toast("Modelo importado en arcilla. Si se ve muy grande o pequeño, cambia su escala.");
+  const heavy = f.size > 20e6 ? " Es pesado: en teléfonos puede tardar en abrir." : "";
+  toast("Modelo importado con sus colores y texturas." + heavy + " Si se ve muy grande o pequeño, cambia su escala.");
+  syncModel(id);
 }
-addEventListener("arnes-model", () => { markDirty(3); if (ui.tab === "pagina") pageEd.draw(); });
-addEventListener("arnes-model-failed", () => toast("No se pudo leer ese modelo. Prueba exportarlo de nuevo como .glb."));
+// Sube el .glb a la nube para abrirlo en otros dispositivos (el proyecto solo guarda su huella)
+function syncModel(id) {
+  modelSyncUp(id).then(up => { if (up === false && cloud.configured() && cloud.user()) toast("El modelo quedó solo en este dispositivo."); })
+    .catch(() => toast("No se pudo subir el modelo a la nube; quedó guardado en este dispositivo."));
+}
+addEventListener("arnes-model", e => {
+  const o = findObj(e.detail), g = world.get(e.detail);
+  if (o && g && o.params?.look !== "arcilla" && !o.color && !o.tex) paint(g, null, true, null);
+  markDirty(3); if (ui.tab === "pagina") pageEd.draw();
+});
+addEventListener("arnes-model-failed", e => toast(/dispositivo/.test(e.detail || "") ? "Un modelo importado no está en este dispositivo: entra con tu cuenta para bajarlo, o vuelve a importarlo." : "No se pudo leer ese modelo. Prueba exportarlo de nuevo como .glb."));
 function deleteSelected() {
   const id = ui.sel; if (!id) return;
   const v = store.v;
@@ -944,6 +961,7 @@ function propsOf(o) {
   if (isFig) h += `<h3>Hojas de modelo</h3><p class="sub">Frente, perfil y espalda de este personaje dibujados por ti. El acabado con IA las usa para que se vea igual en todas las viñetas.</p>
     ${o.sheets?.length ? `<div class="strokestrip sheets">${o.sheets.map((u, i) => `<button class="sheetb" data-act="sheet-del" data-val="${i}" aria-label="Quitar hoja ${i + 1}"><img src="${u}" alt=""><span>×</span></button>`).join("")}</div>` : ""}
     <label class="btn wide filebtn">Subir hojas de modelo (hasta 3)<input type="file" id="sheetfile" accept="image/*" multiple hidden></label>`;
+  if (o.type === "modelo") h += `<h3>Aspecto del modelo</h3><div class="pills">${pill("original", o.params?.look === "arcilla" ? "arcilla" : "original", "Sus colores y texturas", "model-look")}${pill("arcilla", o.params?.look === "arcilla" ? "arcilla" : "original", "Arcilla", "model-look")}</div>`;
   if (!isFig && o.type !== "humo") h += `<h3>Textura</h3><div class="pills">${Object.entries(TEXTURES).map(([k, l]) => pill(k, o.tex || "lisa", l, "obj-tex")).join("")}</div>`;
   h += `<div class="row colorrow"><label class="sel"><span>${isFig ? "Color de la piel o del maniquí" : "Color (para estilos de color y para separar planos)"}</span><input type="color" data-act="obj-color" value="${o.color || "#bdb6ac"}"></label>${o.color ? `<button class="btn" data-act="obj-nocolor">Quitar color</button>` : ""}</div>`;
   h += `<div class="row"><button class="btn" data-act="dup">Duplicar</button><button class="btn" data-act="fwd">Copiar a viñetas siguientes</button><button class="btn danger" data-act="del">Borrar</button></div></div>`;
@@ -1814,6 +1832,7 @@ panel.addEventListener("click", e => {
     case "final-strokes": finalStrokes(); break;
     case "final-ai": finalAI(); break;
     case "ai-forget": writeAi({ model: aiConf().model }); renderPanel(); toast("Se quitó la clave de este dispositivo."); break;
+    case "model-look": { const o = selObj(); if (o) { o.params.look = val; rebuildObject(o); store.commit(); renderPanel(); markDirty(3); } break; }
     case "obj-tex": { const o = selObj(); if (o) { if (val === "lisa") delete o.tex; else o.tex = val; paint(world.get(o.id), o.color || null, !["clay", "grabado"].includes(v.view.mode), o.tex); store.commit(); renderPanel(); markDirty(); } break; }
     case "smoke-tone": { const o = selObj(); if (o) { o.params.tono = val; rebuildObject(o); store.commit(); renderPanel(); markDirty(); } break; }
     case "fx": v.view.fx = val; store.commit(); renderPanel(); markDirty(); break;
@@ -2128,7 +2147,8 @@ dlg.addEventListener("click", async e => {
       }
     } else if (x === "save-proj") {
       storeCamera();
-      st.textContent = await resultMsg(saveFile(`${slug(store.project.name || "proyecto")}.arnes.json`, JSON.stringify(store.project)));
+      const { project: full, missing } = await inlineModels(store.project);
+      st.textContent = await resultMsg(saveFile(`${slug(store.project.name || "proyecto")}.arnes.json`, JSON.stringify(full))) + (missing ? ` Faltaron ${missing} modelo(s) que no están en este dispositivo.` : "");
     } else if (x === "open-proj") { $("#xfile").click(); st.textContent = ""; }
   } catch (err) { console.error(err); st.textContent = "No se pudo completar. Intenta con una resolución menor."; }
   b.disabled = false;
@@ -2138,7 +2158,7 @@ $("#xfile").addEventListener("change", async e => {
   try {
     const p = JSON.parse(await f.text());
     if (!p.vinetas?.length) throw new Error("formato");
-    store.load(migrate(p)); store.scheduleSave(); ui.sel = null; rebuildScene(); renderPanel();
+    store.load(migrate(p)); await settleModels(); store.scheduleSave(); ui.sel = null; rebuildScene(); renderPanel();
     $("#xstatus").textContent = `Abierto: ${p.vinetas.length} viñeta${p.vinetas.length > 1 ? "s" : ""}.`;
   } catch { $("#xstatus").textContent = "Ese archivo no es un proyecto de Arnés."; }
   e.target.value = "";
@@ -2274,9 +2294,13 @@ $("#view-copy").addEventListener("click", async () => {
   leaveViewer(); await store.saveNow(); toast("Copia guardada en tus proyectos. Ya puedes editarla.");
 });
 $("#view-exit").addEventListener("click", () => { leaveViewer(); store.project = null; home.show(); });
+// Saca los .glb incrustados del proyecto (deshacer y la nube ya no cargan megas)
+async function settleModels() {
+  try { if (await externalizeModels(store.project)) store.touch(); } catch {}
+}
 function openProject(project, tab = "escena") {
   if (!project?.vinetas?.length) project = buildExample();
-  store.load(migrate(project));
+  store.load(migrate(project)); settleModels();
   ui.sel = null; ui.joint = null;
   ui.tab = tab;
   for (const t of tabs) t.setAttribute("aria-selected", String(t.dataset.tab === ui.tab));

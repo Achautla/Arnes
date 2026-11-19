@@ -1,5 +1,6 @@
 // Proyecto, viñetas, deshacer y guardado sin conexión
 import { clone, uid } from "./util.js";
+import { presetDay } from "./lights.js";
 
 export const ASPECTS = { libre: null, "1:1": 1, "4:3": 4 / 3, "3:4": 3 / 4, "16:9": 16 / 9, "2:1": 2, "1:2": 0.5 };
 
@@ -10,7 +11,8 @@ export function defaultCamera() {
   return { pos: [2.6, 1.6, 3.2], target: [0, 0.9, 0], mm: 35, roll: 0, aspect: "4:3", shot: null, angle: "normal" };
 }
 export function newVineta(name = "Viñeta") {
-  return { id: uid("v"), name, objects: [], lights: [], camera: defaultCamera(), view: defaultView() };
+  const day = presetDay(); // una viñeta nueva nace con luz de día, no a oscuras
+  return { id: uid("v"), name, objects: [], lights: day.lights, camera: defaultCamera(), view: { ...defaultView(), background: day.background } };
 }
 
 export class Store {

@@ -135,8 +135,14 @@ export function texturedMat(hex, kind, side = THREE.FrontSide) {
 // Pinta un objeto con su color y su textura (o lo regresa a arcilla). Solo toca las piezas de arcilla
 export function paint(root, hex, useColor = true, tex = null) {
   const t = tex && tex !== "lisa" ? tex : null;
+  root.userData.paintArgs = [hex, useColor, tex];
   root.traverse(m => {
     if (!m.isMesh) return;
+    if (m.userData.origMat) { // modelo importado: su propio material salvo que pidan color, textura o arcilla
+      const c = hex && useColor ? hex : null;
+      m.material = t ? texturedMat(t === "piel" ? hex : c, t) : c ? colorMat(c) : m.userData.look === "arcilla" ? clay : m.userData.origMat;
+      return;
+    }
     if (m.userData.baseMat === undefined) { if (m.material !== clay) return; m.userData.baseMat = clay; }
     const c = hex && useColor ? hex : null;
     m.material = t ? texturedMat(t === "piel" ? hex : c, t) : c ? colorMat(c) : m.userData.baseMat;

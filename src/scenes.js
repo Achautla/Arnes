@@ -84,7 +84,11 @@ export function sceneFor(v, { lowEnd = true, mode } = {}) {
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), new THREE.MeshStandardMaterial({ color: PAPER, roughness: 1 }));
     floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
   }
-  for (const def of v.lights) {
+  if (!v.lights?.length) { // viñetas viejas sin luces: luz de cortesía para que no salgan negras
+    const sun = new THREE.DirectionalLight(0xffffff, 1.4); sun.position.set(3, 6, 4);
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8070, 1.1), sun);
+  }
+  for (const def of v.lights || []) {
     const L = buildLight(def, lowEnd);
     scene.add(L); if (L.target) scene.add(L.target);
   }

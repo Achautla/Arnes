@@ -88,3 +88,15 @@ export const pushProfile = data => rest("profiles?on_conflict=user_id", {
   method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
   body: JSON.stringify({ user_id: user().id, data, updated_at: new Date().toISOString() }),
 });
+
+// Modelos .glb: viven en Storage (carpeta del usuario), no dentro del proyecto
+const MODEL_PATH = (owner, id) => `modelos/${encodeURIComponent(owner)}/${encodeURIComponent(id)}.glb`;
+export async function uploadModel(id, blob) {
+  const r = await fetch(base() + "/storage/v1/object/" + MODEL_PATH(user().id, id), { method: "POST", headers: { apikey: CLOUD.anonKey, Authorization: "Bearer " + await token(), "x-upsert": "true", "Content-Type": "model/gltf-binary" }, body: blob });
+  if (!r.ok) throw new Error("No se pudo subir el modelo a la nube (" + r.status + ").");
+}
+export async function downloadModel(owner, id) {
+  const r = await fetch(base() + "/storage/v1/object/authenticated/" + MODEL_PATH(owner, id), { headers: { apikey: CLOUD.anonKey, Authorization: "Bearer " + await token() } });
+  if (!r.ok) throw new Error("No se pudo bajar el modelo de la nube (" + r.status + ").");
+  return r.blob();
+}
