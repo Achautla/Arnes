@@ -391,6 +391,7 @@ function buildGarment(fig, R, g, Qs) {
       const yb = d.hipJY - 0.014 * H, pel = torso(yb, d.hipJY + 0.02 * H); pel.name = "cadera";
       for (let i = 0; i < pel.rows * pel.cols; i++) { const k = 1 - Math.min(1, (pel.rest[i * 3 + 1] - yb) / (0.05 * H)); if (k > 0) { pel.rest[i * 3 + 2] *= 1 - 0.28 * k; pel.rest[i * 3] *= 1 - 0.08 * k; } }
       parts.push(pel, leg("L", 1), leg("R", 1));
+      parts.push(collar(true, false)); // cuello: une el tronco con la cabeza sin anillo
       break;
     }
     case "capa": parts.push(cape(g.length ?? 0.8)); if (g.collar !== "no") parts.push(collar(g.collar === "alzado", true)); break;

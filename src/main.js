@@ -1089,7 +1089,7 @@ function buildScene(sc) {
       const bt = BODY_TYPES[p.cuerpo]; if (bt) { Object.assign(o.params, bt.params); o.bodyType = p.cuerpo; }
       o.tex = "piel"; o.color = SKIN_KEYS[p.piel]?.hex || "#c99a76";
       o.clothes = p.ropa.map(g => { const gg = newGarment(g.tipo); if (g.color) gg.color = g.color; return gg; });
-      o.face.expr = clone(M.EXPRESSIONS[p.expresion] || M.EXPRESSIONS.neutral);
+      o.face.expr = clone(M.EXPRESSIONS[p.expresion] || M.EXPRESSIONS.neutral); o.face.mode = "realista"; o.face.guides = false;
       o.pos = [(p.x - 0.5) * 2.4, 0, -(1 - Math.min(1, p.piesY)) * 3];
       o.pins = {}; void fig0;
       rebuildObject(o);
@@ -1127,12 +1127,87 @@ function buildScene(sc) {
       o.rotY = round(Math.atan2(dir.x, dir.z) / DEG, 1); rebuildObject(o);
       fitKeypoints(o, p.puntos, cam);
     }
+    // nadie queda dentro de un mueble: se sale por el lado más cercano a la cámara
+    for (const { o } of made) separateFromProps(o, camPos);
     if (sc.roll) v.camera.roll = sc.roll;
     v.view.fx = sc.efecto; v.view.ruler = false;
     applyCameraState(); applyBackground(); repaintAll();
     if (main) applyShot(sc.plano, sc.angulo);
     store.commit(); renderPanel(); markDirty(3);
   } finally { ui.instant = false; }
+}
+// ------------------------------------------------------------- Calcar la pose sobre el dibujo
+const BONES = [["cabeza", "cuello"], ["cuello", "hombro_i"], ["cuello", "hombro_d"], ["hombro_i", "codo_i"], ["codo_i", "muneca_i"], ["hombro_d", "codo_d"], ["codo_d", "muneca_d"], ["cuello", "cadera"], ["cadera", "rodilla_i"], ["rodilla_i", "tobillo_i"], ["cadera", "rodilla_d"], ["rodilla_d", "tobillo_d"]];
+const KP_JOINT = { cabeza: "head", cuello: "neck1", hombro_i: "shoulder_L", hombro_d: "shoulder_R", codo_i: "elbow_L", codo_d: "elbow_R", muneca_i: "wrist_L", muneca_d: "wrist_R", cadera: "hips", rodilla_i: "knee_L", rodilla_d: "knee_R", tobillo_i: "ankle_L", tobillo_d: "ankle_R" };
+let trace = null;
+function openTrace() {
+  const o = selObj();
+  if (!o || o.kind !== "figure") { toast("Primero elige un personaje de esta viñeta."); return; }
+  if (!store.v.ref) { toast("Esta viñeta no tiene dibujo."); return; }
+  const fig = figs.get(o.id), cam = exportCamera(); fig.root.updateMatrixWorld(true);
+  // de inicio: los puntos de Gemini para ese personaje, o donde está el personaje ahora
+  const fromRead = store.v.read?.scene?.personajes?.find(p => p.nombre === o.name)?.puntos || {};
+  const pts = {};
+  for (const [k, j] of Object.entries(KP_JOINT)) {
+    if (fromRead[k]) { pts[k] = fromRead[k].slice(); continue; }
+    const q = fig.joints[j].getWorldPosition(new THREE.Vector3()).project(cam);
+    pts[k] = [(q.x + 1) / 2, (1 - q.y) / 2];
+  }
+  trace = { id: o.id, pts };
+  const T = $("#trace"); $("#trace-img").src = store.v.ref;
+  Object.assign(T.style, { left: frameRect.x + "px", top: frameRect.y + "px", width: frameRect.w + "px", height: frameRect.h + "px" });
+  T.hidden = false; drawTrace();
+}
+function drawTrace() {
+  if (!trace) return;
+  const W = frameRect.w, H = frameRect.h, P = trace.pts;
+  $("#trace-svg").innerHTML = BONES.map(([a, b]) => P[a] && P[b] ? `<line class="bone" x1="${P[a][0] * W}" y1="${P[a][1] * H}" x2="${P[b][0] * W}" y2="${P[b][1] * H}"/>` : "").join("")
+    + Object.entries(P).map(([k, [x, y]]) => `<circle class="kp${k.endsWith("_d") ? " side-d" : ""}" data-k="${k}" cx="${x * W}" cy="${y * H}" r="9"><title>${KP_LABELS[k]}</title></circle>`).join("");
+}
+{
+  const S = $("#trace-svg"); let drag = null;
+  S.addEventListener("pointerdown", e => { const k = e.target.dataset?.k; if (!k) return; drag = k; S.setPointerCapture(e.pointerId); e.preventDefault(); });
+  S.addEventListener("pointermove", e => { if (!drag) return; const r = S.getBoundingClientRect(); trace.pts[drag] = [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height]; drawTrace(); });
+  S.addEventListener("pointerup", () => { drag = null; });
+  $("#trace-close").onclick = () => { $("#trace").hidden = true; trace = null; };
+  $("#trace-fit").onclick = () => {
+    const o = store.v.objects.find(x => x.id === trace?.id); if (!o) return;
+    const cam = exportCamera(), P = trace.pts;
+    // la cadera dibujada mueve al personaje sobre el piso; después brazos y piernas van a sus puntos
+    if (P.cadera) {
+      const fig = figs.get(o.id), hipsY = fig.joints.hips.getWorldPosition(new THREE.Vector3()).y;
+      const ray = new THREE.Raycaster(); ray.setFromCamera(new THREE.Vector2(P.cadera[0] * 2 - 1, -(P.cadera[1] * 2 - 1)), cam);
+      const hit = new THREE.Vector3();
+      if (ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -hipsY), hit) && hit.distanceTo(cam.position) < 30) {
+        const cur = fig.joints.hips.getWorldPosition(new THREE.Vector3());
+        o.pos = [round(o.pos[0] + hit.x - cur.x, 2), o.pos[1], round(o.pos[2] + hit.z - cur.z, 2)]; rebuildObject(o);
+      }
+    }
+    fitKeypoints(o, P, cam);
+    store.commit(); renderPanel(); markDirty(3); toast("Pose ajustada a tus puntos. Muévelos y ajusta otra vez si hace falta.");
+  };
+}
+const BIG_PROPS = new Set(["pared", "losa", "terreno", "muro", "piso", "techo"]);
+function separateFromProps(o, camPos) {
+  const fp = new THREE.Vector3(...o.pos), r = 0.22;
+  for (let iter = 0; iter < 4; iter++) {
+    let moved = false;
+    for (const b of store.v.objects) {
+      if (b.kind !== "prop" || BIG_PROPS.has(b.type) || /^muro|^pared/.test(b.type)) continue;
+      const g = world.get(b.id); if (!g) continue;
+      const box = new THREE.Box3().setFromObject(g); if (box.isEmpty() || box.max.y < 0.25 || box.min.y > 1.2) continue;
+      if (box.max.x - box.min.x > 4 || box.max.z - box.min.z > 4) continue;
+      if (fp.x > box.min.x - r && fp.x < box.max.x + r && fp.z > box.min.z - r && fp.z < box.max.z + r) {
+        // salidas posibles: los cuatro lados; gana la más corta, con preferencia hacia la cámara
+        const opts = [[box.min.x - r - fp.x, 0], [box.max.x + r - fp.x, 0], [0, box.min.z - r - fp.z], [0, box.max.z + r - fp.z]];
+        let best = null, bs = Infinity;
+        for (const [dx, dz] of opts) { const toward = camPos ? (camPos.x - fp.x) * dx + (camPos.z - fp.z) * dz : 0; const sc2 = Math.hypot(dx, dz) - Math.sign(toward) * 0.08; if (sc2 < bs) { bs = sc2; best = [dx, dz]; } }
+        fp.x += best[0]; fp.z += best[1]; moved = true;
+      }
+    }
+    if (!moved) break;
+  }
+  if (fp.x !== o.pos[0] || fp.z !== o.pos[2]) { o.pos = [round(fp.x, 2), o.pos[1], round(fp.z, 2)]; rebuildObject(o); groundFigure(figs.get(o.id)); }
 }
 // Pose fina: cada muñeca y tobillo va hacia su punto en el dibujo, en un plano que pasa por la cadera del personaje
 function fitKeypoints(o, pts, cam) {
@@ -1178,6 +1253,7 @@ function panelDibujo(v) {
   else h += `<p class="sub">Sube el dibujo de una sola viñeta, o crea una página desde una foto (pestaña Página) y cada viñeta tendrá su dibujo.</p>`;
   h += `<label class="btn wide filebtn">${v.ref ? "Cambiar dibujo de la viñeta" : "Subir dibujo de la viñeta"}<input type="file" id="vinfile" accept="image/*" hidden></label>`;
   if (v.read?.descripcion) h += `<p class="sub">${esc(v.read.descripcion)}</p>`;
+  if (v.ref) h += `<button class="btn wide" data-act="trace-open">Calcar la pose sobre el dibujo (sin IA)</button><p class="sub">Elige un personaje y arrastra sus puntos (cabeza, manos, pies…) sobre tu dibujo; la pose se ajusta sola.</p>`;
   if (v.ref) h += `<button class="btn wide" data-act="vin-read" ${ui.readBusy ? "disabled" : ""}>${ui.readBusy ? "Gemini está leyendo el dibujo…" : sc ? "Volver a leer el dibujo" : "Leer el dibujo con Gemini"}</button>`;
   if (sc) {
     h += `<div class="card calrep"><p class="sub"><strong>Revisa antes de armar.</strong></p>${sceneSummary(sc).map(l => `<p class="sub">${esc(l)}</p>`).join("")}`;
@@ -1379,8 +1455,9 @@ function panelPose() {
     ${fingerSliders(o, fs, fn)}</details>`;
   // Rostro
   const f = o.face || M.DEFAULT_FACE, e = f.expr;
-  h += `<h3>Rostro</h3><div class="pills">${pill("simple", f.mode, "Guías de construcción", "face-mode")}${pill("detallado", f.mode, "Detallado", "face-mode")}${pill("guides", f.guides ? "guides" : "", "Mostrar guías", "face-guides")}</div>
+  h += `<h3>Rostro</h3><div class="pills">${pill("simple", f.mode, "Guías de construcción", "face-mode")}${pill("detallado", f.mode, "Detallado", "face-mode")}${pill("realista", f.mode, "Realista", "face-mode")}${pill("guides", f.guides ? "guides" : "", "Mostrar guías", "face-guides")}</div>
   <div class="pills">${Object.entries(M.EXPRESSIONS).map(([k, d]) => pill(k, f.exprName, d.label, "expr")).join("")}${savedExpr().map((x, i) => pill("mine:" + i, f.exprName, x.name, "expr")).join("")}</div>
+  ${f.mode === "realista" ? `<details class="more" open><summary>Rasgos</summary>${Object.entries(M.FACE_FEATURES).map(([k, l]) => slider(k, l, f.feat?.[k] ?? 0, k === "age" ? 0 : -1, 1, 0.05, "", "face-feat")).join("")}<p class="sub">Con la piel puesta, el rostro toma el mismo tono.</p></details>` : ""}
   <details class="more"${ui.faceOpen ? " open" : ""} data-det="face"><summary>Ajustar expresión</summary>
     ${faceSlider("brow.0", "Ceja izquierda (baja ↔ sube)", e.brow[0], -1, 1, 0.05)}${faceSlider("brow.1", "Ceja derecha (baja ↔ sube)", e.brow[1], -1, 1, 0.05)}
     ${faceSlider("brow.2", "Ceja izquierda (enojo ↔ tristeza)", e.brow[2], -30, 30, 1)}${faceSlider("brow.3", "Ceja derecha (enojo ↔ tristeza)", e.brow[3], -30, 30, 1)}
@@ -1633,13 +1710,13 @@ panel.addEventListener("click", e => {
       store.commit(); renderPanel(); markDirty(); break;
     }
     case "rings": ui.rings = !ui.rings; attachGizmo(); renderPanel(); markDirty(); break;
-    case "face-mode": o.face.mode = val; setFace(o); store.commit(); renderPanel(); break;
+    case "face-mode": o.face.mode = val; setFace(o); store.commit(); renderPanel(); markDirty(); break;
     case "face-guides": o.face.guides = !o.face.guides; setFace(o); store.commit(); renderPanel(); break;
     case "expr": {
       const src = val.startsWith("mine:") ? savedExpr()[+val.slice(5)]?.expr : M.EXPRESSIONS[val];
       if (!src) break;
       o.face.expr = clone(src); delete o.face.expr.label; o.face.exprName = val;
-      if (o.face.mode !== "detallado" && !val.startsWith("neutral")) o.face.mode = "detallado";
+      if (o.face.mode !== "detallado" && o.face.mode !== "realista" && !val.startsWith("neutral")) o.face.mode = "detallado";
       setFace(o); store.commit(); renderPanel(); break;
     }
     case "expr-save": { const name = $("#exprname").value.trim() || `Expresión ${savedExpr().length + 1}`; const all = savedExpr(); all.push({ name, expr: clone(o.face.expr) }); writeExpr(all); o.face.exprName = "mine:" + (all.length - 1); ui.faceOpen = true; renderPanel(); toast("Expresión guardada en este dispositivo."); break; }
@@ -1730,6 +1807,7 @@ panel.addEventListener("click", e => {
     case "fig-tone": { const o = selObj(); if (!o) break; o.color = val; rebuildObject(o); store.commit(); renderPanel(); markDirty(3); break; }
     case "strokes-del": writeStrokes([]); renderPanel(); toast("Se borraron tus trazos."); break;
     case "sheet-del": { const o = selObj(); if (o?.sheets) { o.sheets.splice(+val, 1); store.commit(); renderPanel(); } break; }
+    case "trace-open": openTrace(); break;
     case "vin-read": { ui.readBusy = true; renderPanel(); readVineta(store.v).then(() => toast("Listo: revisa lo que entendió y arma la escena.")).catch(e => toast(e.message)).finally(() => { ui.readBusy = false; renderPanel(); }); break; }
     case "vin-build": { const sc = store.v.read?.scene; if (sc) { buildScene(clone(sc)); toast("Escena armada desde tu dibujo. Ajusta lo que haga falta."); } break; }
     case "read-drop": { const sc = store.v.read?.scene; if (sc) { sc.personajes.splice(+val, 1); store.commit(); renderPanel(); } break; }
@@ -1757,6 +1835,8 @@ panel.addEventListener("input", e => {
     if (ui.sym && /_[LR]$/.test(j)) M.symmetrize(o.pose, j.slice(-1));
     if (out) out.textContent = Math.round(val) + "°";
     M.applyPose(figs.get(o.id), o.pose, o.relaxed); markDirty();
+  } else if (act === "face-feat") {
+    o.face.feat = { ...(o.face.feat || {}), [key]: val }; setFace(o);
   } else if (act === "face") {
     const [k, idx] = key.split(".");
     if (idx !== undefined) o.face.expr[k][+idx] = val; else o.face.expr[k] = val;

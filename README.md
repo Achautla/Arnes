@@ -2,6 +2,23 @@
 
 Storyboard 3D para cómic: posar personajes, colocar cámaras y luces, y obtener un semirender (volumen, sombras y valores) para dibujar a lápiz.
 
+## Fase 5 · cierre (19-nov)
+
+- **Rostro realista:** cabeza esculpida de una sola superficie (cuencas, pómulos, nariz, labios, mentón y mandíbula) con siete rasgos ajustables, incluida la edad.
+- **Calcar la pose sobre el dibujo, sin IA:** el dibujo de la viñeta se pone encima del visor y arrastras los puntos del esqueleto; la cadera mueve al personaje y manos y pies van a sus puntos.
+- **Al armar una escena** los personajes ya no quedan dentro de los muebles, y salen con rostro realista.
+- **Piel con cuello:** el tronco se une con la cabeza sin anillo.
+- Corregido un paréntesis que desde el 18-nov por la noche impedía cargar la app.
+
+### Pendiente antes de la Fase 6
+
+- Manos con detalle (nudillos, uñas) y piel continua en manos, pies y cabeza.
+- Músculos visibles en el cuerpo heroico.
+- Hombros: se nota el corte entre el tronco y la manga de la piel.
+- Rostro realista: todavía se ve modelado, no fotográfico; falta textura de piel en la cara.
+- Probar con Gemini real (lectura de página, de viñeta y acabado). Las imágenes no tienen cuota gratis.
+- En el video, interpolar también las luces.
+
 ## Fase 5 · entregas 2 a 9 (18-nov)
 
 - **Viñeta a escena** (Escena → «Desde tu dibujo»): Gemini lee el dibujo de la viñeta y devuelve plano, ángulo, lente, escenario, luz, efecto, personajes (pose, cuerpo, piel, ropa, expresión, giro, posición) y objetos del catálogo. Pantalla de revisión; luego se arma la escena.

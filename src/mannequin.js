@@ -201,6 +201,8 @@ const ball = new THREE.SphereGeometry(1, 28, 18);
 const inkMat = new THREE.MeshBasicMaterial({ color: 0x2b2a28 });
 const eyeMat = new THREE.MeshStandardMaterial({ color: 0xe9e4da, roughness: 0.5 });
 const mouthMat = new THREE.MeshBasicMaterial({ color: 0x2b2420 });
+const browMat = new THREE.MeshStandardMaterial({ color: 0x3a2a22, roughness: 0.9 });
+const lipLineMat = new THREE.MeshStandardMaterial({ color: 0x6b3b34, roughness: 0.6, transparent: true, opacity: 0.55 });
 
 function part(parent, m, mass, joint) {
   m.castShadow = true; m.receiveShadow = true;
@@ -396,15 +398,83 @@ function buildFace(head, jaw, hh) {
   const hole = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 10), mouthMat); hole.scale.set(lipW * 0.6, 0.0001, hh * 0.02); mouth.add(hole);
   jaw.add(mouth);
   head.add(det);
-  head.userData.face = { guides, det, mouth, center, cL, cR, hole, lipW, ...feat, hh };
+  // Cabeza esculpida (modo realista): una sola superficie con frente, cuencas, pómulos, nariz, labios,
+  // mentón y mandíbula. Los rasgos se ajustan con parámetros sin rehacer el personaje.
+  const sg = new THREE.SphereGeometry(1, 72, 54);
+  const dirs = sg.attributes.position.array.slice();
+  const sculpt = new THREE.Mesh(sg, clay); sculpt.userData.joint = "head"; sculpt.castShadow = true; sculpt.receiveShadow = true;
+  sculpt.visible = false; head.add(sculpt);
+  const skullMeshes = []; head.children.forEach(c => { if (c.isMesh && c.userData.joint === "head" && c !== sculpt && !c.userData.face) skullMeshes.push(c); });
+  head.userData.face = { guides, det, mouth, center, cL, cR, hole, lipW, ...feat, hh, sculpt, dirs, rx, ry, rz, cy, cz, skullMeshes, jaw };
+}
+
+// Rasgos: cada uno es un bulto o una hendidura en (ángulo horizontal u, ángulo vertical w) del cráneo
+const FEATURES = (f) => [
+  // [u, w, ancho u, ancho w, altura (en altura de cabeza)]
+  [0, -0.12, 0.07, 0.14, 0.05 + 0.02 * f.nose],            // puente de la nariz
+  [0, -0.32, 0.1, 0.09, 0.13 + 0.05 * f.nose],             // punta de la nariz
+  [0.12, -0.37, 0.06, 0.05, 0.045], [-0.12, -0.37, 0.06, 0.05, 0.045], // aletas
+  [0, -0.45, 0.07, 0.035, -0.012],                         // surco bajo la nariz
+  [0, -0.54, 0.2, 0.05, 0.03 + 0.015 * f.lips],            // labio superior
+  [0, -0.66, 0.16, 0.05, 0.034 + 0.018 * f.lips],          // labio inferior
+  [0.21, -0.6, 0.05, 0.05, -0.018], [-0.21, -0.6, 0.05, 0.05, -0.018], // comisuras
+  [0, -0.8, 0.12, 0.05, -0.015],                           // hoyo bajo el labio
+  [0, -0.98, 0.32, 0.16, 0.035 + 0.03 * f.chin],             // mentón
+  [0.36, 0.0, 0.14, 0.1, -0.06], [-0.36, 0.0, 0.14, 0.1, -0.06], // cuencas de los ojos
+  [0.34, 0.25, 0.22, 0.06, 0.03 + 0.02 * f.brow], [-0.34, 0.25, 0.22, 0.06, 0.03 + 0.02 * f.brow], // arco de las cejas
+  [0.62, -0.2, 0.18, 0.12, 0.035 + 0.03 * f.cheek], [-0.62, -0.2, 0.18, 0.12, 0.035 + 0.03 * f.cheek], // pómulos
+  [0.55, -0.52, 0.16, 0.13, -0.02 - 0.01 * f.cheek], [-0.55, -0.52, 0.16, 0.13, -0.02 - 0.01 * f.cheek], // mejillas
+  [1.05, 0.3, 0.25, 0.2, -0.018], [-1.05, 0.3, 0.25, 0.2, -0.018], // sienes
+  [Math.PI, -0.15, 0.6, 0.35, 0.025],                      // occipital
+];
+export const FACE_FEATURES = { nose: "Nariz", jaw: "Mandíbula", cheek: "Pómulos", chin: "Mentón", lips: "Labios", brow: "Cejas (hueso)", age: "Edad (arrugas)" };
+function sculptHead(F, feat = {}) {
+  const f = { nose: 0, jaw: 0, cheek: 0, chin: 0, lips: 0, brow: 0, age: 0, ...feat };
+  const key = JSON.stringify(f); if (F.sculptKey === key) return; F.sculptKey = key;
+  const pos = F.sculpt.geometry.attributes.position, a = pos.array, D = F.dirs, hh = F.hh, FT = FEATURES(f);
+  for (let i = 0; i < a.length; i += 3) {
+    const x = D[i], y = D[i + 1], z = D[i + 2];
+    const u = Math.atan2(x, z), w = Math.asin(Math.max(-1, Math.min(1, y)));
+    let disp = 0;
+    for (const [fu, fw, su, sw, amp0] of FT) { const amp = amp0 * 1.45;
+      let du = u - fu; du = Math.atan2(Math.sin(du), Math.cos(du));
+      disp += amp * Math.exp(-((du / su) ** 2 + ((w - fw) / sw) ** 2));
+    }
+    // arrugas de la edad: frente y patas de gallo, como surcos finos
+    if (f.age > 0) {
+      if (w > 0.35 && w < 0.75 && Math.abs(u) < 0.6) disp -= f.age * 0.004 * Math.max(0, Math.sin((w - 0.35) * 48));
+      for (const k of [1, -1]) { const du = u - 0.62 * k, dw = w - 0.02; if (Math.abs(du) < 0.12 && Math.abs(dw) < 0.12) disp -= f.age * 0.003 * Math.max(0, Math.sin(Math.atan2(dw, du) * 6)); }
+    }
+    let px = F.rx * x, py = F.cy + F.ry * y, pz = F.cz + F.rz * z;
+    // mandíbula: la cara se angosta hacia abajo, más o menos según el parámetro
+    if (y < -0.15) { const t = Math.min(1, (-y - 0.15) / 0.85); px *= 1 - (0.13 - 0.1 * f.jaw) * t * t; pz *= z > 0 ? 1 + 0.06 * t : 1 - 0.25 * t; }
+    // la cara es más plana que el cráneo
+    if (z > 0 && Math.abs(u) < 1.2) pz *= 1 - 0.08 * Math.cos(u) * Math.max(0, Math.cos(w));
+    const nx = x / F.rx, ny = y / F.ry, nz = z / F.rz, nl = Math.hypot(nx, ny, nz) || 1;
+    a[i] = px + (nx / nl) * disp * hh; a[i + 1] = py + (ny / nl) * disp * hh; a[i + 2] = pz + (nz / nl) * disp * hh;
+  }
+  pos.needsUpdate = true; F.sculpt.geometry.computeVertexNormals(); F.sculpt.geometry.computeBoundingSphere();
 }
 
 // Aplica modo de rostro y expresión
 export function applyFace(fig, face) {
   const F = fig.joints.head.userData.face; if (!F || !face) return;
   const hh = F.hh, e = face.expr || EXPRESSIONS.neutral;
-  F.guides.visible = !!face.guides;
-  const det = face.mode === "detallado";
+  F.guides.visible = !!face.guides && face.mode !== "realista";
+  const real = face.mode === "realista";
+  if (F.sculpt) {
+    F.sculpt.visible = real;
+    for (const m of F.skullMeshes) m.visible = !real;
+    F.jaw.children.forEach(c => { if (c.isMesh && c.userData.face === "jaw") c.visible = !real; });
+    fig.root.traverse(m => { if (m.userData.face === "nose") m.visible = !real; });
+    if (real) sculptHead(F, face.feat);
+  }
+  const det = face.mode === "detallado" || real;
+  if (F.sculpt) {
+    // en realista, cejas de pelo (más delgadas, del tono del cabello) y boca sin trazo: los labios son del modelado
+    for (const s of ["L", "R"]) { const br = F["brow" + s]; br.scale.set(real ? 0.85 : 1, real ? 0.55 : 1, real ? 0.6 : 1); br.material = real ? browMat : inkMat; }
+    for (const m of [F.center, F.cL, F.cR]) m.material = real ? lipLineMat : inkMat;
+  }
   F.det.visible = det; F.mouth.visible = det;
   for (const s of ["L", "R"]) {
     const i = s === "L" ? 0 : 1, k = s === "L" ? 1 : -1;
