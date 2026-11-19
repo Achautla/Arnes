@@ -109,7 +109,7 @@ Si la página se lee de derecha a izquierda, usa "manga". La lectura que eligió
     body: JSON.stringify({ contents: [{ role: "user", parts: [{ inline_data: { mime_type: "image/jpeg", data: t.toDataURL("image/jpeg", 0.85).split(",")[1] } }, { text: prompt }] }], generationConfig: { responseMimeType: "application/json" } }),
   });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error((j.error?.message ? "Gemini dice: " + j.error.message.slice(0, 160) + " — " : "") + (r.status === 429 ? "Se acabó tu cuota gratuita de Gemini por hoy o por minuto; espera un poco." : r.status === 400 ? "Gemini no aceptó la clave." : "Gemini no respondió; se usó la lectura local.");
+  if (!r.ok) throw new Error((j.error?.message ? "Gemini dice: " + j.error.message.slice(0, 160) + " — " : "") + (r.status === 429 ? "Se acabó tu cuota gratuita de Gemini por hoy o por minuto; espera un poco." : r.status === 400 ? "Gemini no aceptó la clave." : "Gemini no respondió; se usó la lectura local."));
   const txt = j.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "";
   let o; try { o = JSON.parse(txt.replace(/^```(json)?|```$/g, "").trim()); } catch { throw new Error("Gemini respondió algo que no se pudo leer; se usó la lectura local."); }
   const list = (o.vinetas || []).filter(v => Array.isArray(v.box_2d) && v.box_2d.length === 4)
