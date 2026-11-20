@@ -55,7 +55,7 @@ export function colorMat(hex) {
 // Texturas de superficie: dibujan detalle en el valor (vetas, juntas, hojas, grietas) para que cada
 // estilo lo interprete: el grabado lo convierte en rayado, el color dinámico en manchas planas.
 export const TEXTURES = { lisa: "Lisa", madera: "Madera", ladrillo: "Ladrillo", follaje: "Follaje", piedra: "Piedra", tejido: "Tela o tejido", metal: "Metal gastado" };
-const TEX_ID = { madera: 1, ladrillo: 2, follaje: 3, piedra: 4, tejido: 5, metal: 6, piel: 7, mezclilla: 8, lana: 9, cuero: 10, seda: 11 };
+const TEX_ID = { madera: 1, ladrillo: 2, follaje: 3, piedra: 4, tejido: 5, metal: 6, piel: 7, mezclilla: 8, lana: 9, cuero: 10, seda: 11, escamas: 12, quitina: 13, rugosa: 14 };
 export const SKIN_TONES = { "#f0d0b8": "Muy clara", "#e2b593": "Clara", "#c99a76": "Media", "#a6744f": "Morena", "#7a5038": "Oscura", "#563628": "Muy oscura" };
 const texGLSL = `
 varying vec3 vWPos; varying vec3 vWN; uniform int texKind; uniform float texScale;
@@ -81,6 +81,16 @@ float texPattern(){
   if (texKind == 3) { // follaje: hojas en manchas de alto contraste
     float l = tf(uv * 16.0); float l2 = tf(uv * 34.0 + 5.0);
     return mix(0.3, 1.0, smoothstep(0.42, 0.62, l)) * mix(0.7, 1.0, smoothstep(0.35, 0.7, l2));
+  }
+  if (texKind == 12 || texKind == 14) { // escamas (celdas chicas con orilla oscura) o piel rugosa de reptil
+    float sc = texKind == 12 ? 90.0 : 45.0; vec2 g = uv * sc, i = floor(g), f = fract(g); float d1 = 9.0, d2 = 9.0;
+    for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) { vec2 o = vec2(x, y); vec2 r = o + vec2(th(i + o), th(i + o + 7.0)) * 0.8 - f; float d = dot(r, r); if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) d2 = d; }
+    float rim = smoothstep(0.0, texKind == 12 ? 0.18 : 0.1, sqrt(d2) - sqrt(d1));
+    return mix(0.5, 1.0, rim) * mix(0.82, 1.0, tf(uv * 8.0));
+  }
+  if (texKind == 13) { // quitina: placas lisas con juntas finas
+    float b = fract(uv.y * 9.0); float j = smoothstep(0.0, 0.06, b) * smoothstep(1.0, 0.94, b);
+    return mix(0.45, 1.0, j) * mix(0.9, 1.0, tn(uv * 30.0));
   }
   if (texKind == 4) { // piedra: celdas con grietas
     vec2 g = uv * 6.0, i = floor(g), f = fract(g); float d1 = 9.0, d2 = 9.0;

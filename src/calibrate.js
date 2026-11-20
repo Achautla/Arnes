@@ -1,3 +1,4 @@
+import { askJSON, askImage } from "./ai.js";
 // Calibrar un estilo de artista desde una página suya: primero un análisis local (gratis, sin internet)
 // y, si el artista puso su clave de Gemini, una lectura con IA que afina los parámetros.
 
@@ -99,25 +100,9 @@ export async function analyzeAI(canvas, { key, model }, local) {
   const big = document.createElement("canvas"), k = Math.min(1, 1024 / Math.max(canvas.width, canvas.height));
   big.width = Math.round(canvas.width * k); big.height = Math.round(canvas.height * k);
   big.getContext("2d").drawImage(canvas, 0, 0, big.width, big.height);
-  const data = big.toDataURL("image/jpeg", 0.85).split(",")[1];
-  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model || AI_DEFAULT_MODEL)}:generateContent`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-    body: JSON.stringify({
-      contents: [{ role: "user", parts: [{ inline_data: { mime_type: "image/jpeg", data } }, { text: PROMPT + `\nLa lectura automática local propuso: ${JSON.stringify(local)}. Corrígela si no coincide con la página.` }] }],
-      generationConfig: { responseMimeType: "application/json" },
-    }),
-  });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    const m = j.error?.message || "";
-    if (r.status === 400 && /api key/i.test(m)) throw new Error("Gemini no aceptó la clave. Revísala en Google AI Studio y vuelve a pegarla.");
-    if (r.status === 404) throw new Error(`Gemini no encontró el modelo «${model}». Prueba con ${AI_DEFAULT_MODEL}.`);
-    if (r.status === 429) throw new Error("Se acabó tu cuota de Gemini por ahora. Espera unos minutos o revisa tu plan en Google AI Studio.");
-    throw new Error("Gemini no respondió" + (m ? ": " + m.slice(0, 160) : "") + ". Se usó solo la lectura local.");
-  }
-  const txt = j.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "";
-  let o; try { o = JSON.parse(txt.replace(/^```(json)?|```$/g, "").trim()); } catch { throw new Error("Gemini respondió algo que no se pudo leer. Se usó solo la lectura local."); }
+  let o, via;
+  try { ({ json: o, via } = await askJSON([big.toDataURL("image/jpeg", 0.85)], PROMPT + `\nLa lectura automática local propuso: ${JSON.stringify(local)}. Corrígela si no coincide con la página.`)); }
+  catch (e) { throw new Error(e.message + " Se usó solo la lectura local."); }
   const isHex = v => typeof v === "string" && /^#[0-9a-f]{6}$/i.test(v);
   const num = (v, a, b, def) => (typeof v === "number" && isFinite(v) ? clamp(v, a, b) : def);
   const mode = ["dinamico", "grabado", "pintura"].includes(o.mode) ? o.mode : local.mode;
@@ -125,5 +110,5 @@ export async function analyzeAI(canvas, { key, model }, local) {
   if (mode === "grabado") Object.assign(view, { hatch: num(o.hatch, 3, 12, local.hatch ?? 5), grain: num(o.grain, 0, 1, local.grain ?? 0.6), paper: isHex(o.paper) ? o.paper : local.paper || "#e6d3ae", sepia: isHex(o.sepia) ? o.sepia : local.sepia || "#2a1d12", background: "papel" });
   else if (mode === "pintura") Object.assign(view, { grain: num(o.grain, 0, 1, local.grain ?? 0.6), detail: local.detail ?? 0.5, shadeTint: isHex(o.shadeTint) ? o.shadeTint : local.shadeTint || "#1f3550", lightTint: isHex(o.lightTint) ? o.lightTint : local.lightTint || "#d8ecff" });
   else Object.assign(view, { burst: true, burstA: isHex(o.burstA) ? o.burstA : local.burstA || "#ffb36b", burstB: isHex(o.burstB) ? o.burstB : local.burstB || "#d23c35" });
-  return { view, name: typeof o.nombre === "string" ? o.nombre.slice(0, 40) : "", notes: typeof o.notas === "string" ? o.notas.slice(0, 400) : "" };
+  return { view, via, name: typeof o.nombre === "string" ? o.nombre.slice(0, 40) : "", notes: typeof o.notas === "string" ? o.notas.slice(0, 400) : "" };
 }

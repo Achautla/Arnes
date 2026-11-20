@@ -2,6 +2,13 @@
 
 Storyboard 3D para cómic: posar personajes, colocar cámaras y luces, y obtener un semirender (volumen, sombras y valores) para dibujar a lápiz.
 
+## Fase 6 · bloques 0 y 1 (19-nov)
+- **Servicios de IA** (Luz → Servicios de IA): Gemini, OpenRouter, OpenAI, Groq, Mistral, xAI, Anthropic (solo leer) y cualquier servicio compatible con OpenAI. Cada ficha trae el enlace para sacar la clave, modelos para leer y para dibujar, «Probar», y el orden de respaldo: si uno falla o se queda sin cuota, Arnés prueba el siguiente. Las claves viven solo en el dispositivo. Todo lo de IA conserva su camino sin IA.
+- **Estilos aprendidos editables**: cada parámetro se ajusta a mano, se duplica (versiones) y se mezcla con otro estilo.
+- **Criaturas** (Escena → + Criatura): 9 plantillas (reptil, cuadrúpedo, ave, serpiente, pez, insectoide, arácnido, bípedo no humano, colosal) con esqueleto propio y piel continua con pesos. Proporciones por deslizador, 0–4 pares de patas, erguida, alas, aletas; piel lisa, rugosa, escamas, pelaje, plumas o quitina; coraza en bandas, escudos o placas; pliegues, púas, cuernos, dientes, cejas óseas, masa de hombros. Poses rápidas y giro por articulación; la boca se abre.
+- **Criatura desde tu dibujo**: vista de lado (y opcional de frente) → silueta separada del papel y de los renglones, perfil de grosor, cola, cabeza, patas y ancho; propone plantilla y proporciones. Es una propuesta para afinar, no una copia.
+- **Escala colosal**: niebla, piso, sombras y cámara se estiran con el tamaño de lo que hay en la viñeta; lente desde 8 mm.
+
 ## Fase 5 · cierre (19-nov)
 
 - **Rostro realista:** cabeza esculpida de una sola superficie (cuencas, pómulos, nariz, labios, mentón y mandíbula) con siete rasgos ajustables, incluida la edad.

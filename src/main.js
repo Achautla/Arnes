@@ -8,7 +8,7 @@ import { POSE_LIBRARY, POSE_CATS } from "./poses.js";
 import { PRIMITIVES, PROPS, EXTRA_PROPS, TERRAIN, TERRAIN_TYPES, ALL_PROPS, buildProp } from "./props.js";
 import { LIGHT_TYPES, newLight, buildLight, buildLightIcon, presetNoir, presetDay, presetSunset, presetMoon, presetNeon, presetFire, presetBacklight, presetUnder, presetBlinds, PRESETS, GOBOS } from "./lights.js";
 import { Composer, renderToBlob, MODES, LIGHT_NOTES, STYLE_KEYS, BASE_STYLES, FX } from "./render.js";
-import { applyAtmosphere, aspectOf, sceneFor, disposeScene } from "./scenes.js";
+import { applyAtmosphere, aspectOf, sceneFor, disposeScene, sceneSpan } from "./scenes.js";
 import { SCENARIOS } from "./scenarios.js";
 import { createPageEditor, styleView, FORMATS, newPage } from "./page.js";
 import { detectLocal, detectAI, readingOrder, toPagePanels } from "./pageread.js";
@@ -29,7 +29,10 @@ import { makeVideo } from "./video.js";
 import { loadHuman, humanReady, attachHuman, humanDims, DEFAULT_HUMAN, yearsToAge, ageToYears, sculptAt, encodeSculpt } from "./human.js";
 import { dressHuman, equipHuman, humanShellAcc } from "./humandress.js";
 import * as T from "./taller.js";
-import { learnStyle, drawInStyle, describeStyle } from "./style.js";
+import { learnStyle, drawInStyle, describeStyle, STYLE_PARAMS, getParam, setParam, mixStyles } from "./style.js";
+import { aiReady, chain as aiChain, PROVIDERS } from "./ai.js";
+import { openAiWindow } from "./aiwin.js";
+import { TEMPLATES as C_TPL, SURFACES as C_SURF, ARMORS as C_ARMOR, QUICK_POSES as C_POSES, newCreatureParams, buildCreature, setCreatureStyle, quickPose, creatureJoints, applyCreaturePose, creatureFromDrawing } from "./creature.js";
 
 const PAPER = 0xf1f0ec, DARK = 0x111214, BLUE = 0x7cc0ea, BLUE_DEEP = 0x3e7fb0;
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -150,6 +153,10 @@ function buildObject(o) {
     fig.root.userData.isFigure = true;
     if (fig.human || o.clothes?.length || hasHair(o) || o.tex === "piel") dressFig(o, fig);
     if (o.accessories?.length) fig.acc = fig.human ? equipHuman(fig, o.accessories, { useColor: store.v.view.mode !== "clay" }, equip) : equip(fig, o.accessories, { useColor: store.v.view.mode !== "clay" });
+  } else if (o.kind === "creature") {
+    g = buildCreature(o);
+    g.position.fromArray(o.pos); g.rotation.set(...(o.rot || [0, 0, 0]).map(d => d * DEG)); g.scale.fromArray(o.scale || [1, 1, 1]);
+    setCreatureStyle(g, !["clay", "grabado"].includes(store.v.view.mode), o.color);
   } else {
     g = buildProp(o.type, o.params);
     g.position.fromArray(o.pos);
@@ -158,7 +165,7 @@ function buildObject(o) {
   }
   g.userData.objId = o.id;
   g.traverse(c => { c.userData.objId = o.id; });
-  if (o.color || o.tex) paint(g, o.color || null, !["clay", "grabado"].includes(store.v.view.mode), o.tex);
+  if (o.kind !== "creature" && (o.color || o.tex)) paint(g, o.color || null, !["clay", "grabado"].includes(store.v.view.mode), o.tex);
   if (store.v.view.forms && o.kind === "figure") addForms(g);
   g.updateMatrixWorld(true);
   world.set(o.id, g); content.add(g);
@@ -210,7 +217,7 @@ const OUTFITS = {
 };
 function rebuildObject(o) {
   const old = world.get(o.id);
-  if (old) { content.remove(old); disposeTree(old); }
+  if (old) { content.remove(old); disposeTree(old); if (old.userData.isCreature) old.traverse(m => { if (m.isMesh) { m.geometry.dispose(); m.material.dispose?.(); } }); }
   figs.delete(o.id);
   const g = buildObject(o);
   if (ui.sel === o.id) attachGizmo();
@@ -226,7 +233,7 @@ function rebuildLights() {
     sun.position.set(3, 6, 4); lightGroup.add(amb, sun);
   }
   for (const def of store.v.lights) {
-    const light = buildLight(def, low);
+    const light = buildLight(def, low, sceneSpan(store.v.objects));
     lightGroup.add(light); if (light.target) lightGroup.add(light.target);
     const icon = buildLightIcon(def);
     icon.visible = def.type !== "ambiente";
@@ -235,8 +242,9 @@ function rebuildLights() {
   }
 }
 function applyBackground() {
-  const v = store.v.view, dark = v.background === "oscuro";
-  applyAtmosphere(scene, v);
+  const v = store.v.view, dark = v.background === "oscuro", span = sceneSpan(store.v.objects);
+  applyAtmosphere(scene, v, span);
+  floor.scale.setScalar(span); camera.far = 200 * span; camera.near = 0.03 * Math.sqrt(span); camera.updateProjectionMatrix(); controls.maxDistance = 30 * span;
   minor.material.opacity = dark ? 0.12 : 0.28; major.material.opacity = dark ? 0.3 : 0.7;
   grid.visible = !!v.grid;
   const terrain = [...world.values()].some(g => g.userData.hidesFloor);
@@ -245,7 +253,7 @@ function applyBackground() {
 function repaintAll() {
   const useColor = !["clay", "grabado"].includes(store.v.view.mode);
   for (const f of figs.values()) { f.dress?.setStyle({ color: useColor, map: !!store.v.view.tension }); f.acc?.setStyle(useColor); }
-  for (const o of store.v.objects) { const g = world.get(o.id); if (g) paint(g, o.color || null, useColor, o.tex); figs.get(o.id)?.human?.setStyle(useColor, o.color, o.hair?.color); }
+  for (const o of store.v.objects) { const g = world.get(o.id); if (g && o.kind === "creature") { setCreatureStyle(g, useColor, o.color); continue; } if (g) paint(g, o.color || null, useColor, o.tex); figs.get(o.id)?.human?.setStyle(useColor, o.color, o.hair?.color); }
 }
 // Formas básicas: cajas de construcción sobre cada parte del cuerpo (ayuda para dibujar)
 const formsMat = new THREE.LineBasicMaterial({ color: 0x3e7fb0, transparent: true, opacity: 0.85 });
@@ -802,6 +810,13 @@ function addFigure(opts = {}) {
   pinHere(o, fig, "ankle_L"); pinHere(o, fig, "ankle_R");
   void g; store.commit(); select(o.id);
 }
+function addCreature(tpl = "reptil", params = null) {
+  const t = controls.target;
+  const p = params || newCreatureParams(tpl);
+  const o = { id: uid("c"), kind: "creature", name: store.nextName(C_TPL[p.template]?.label || "Criatura"), pos: [round(t.x, 2), 0, round(t.z, 2)], rot: [0, 0, 0], scale: [1, 1, 1], cparams: p, cpose: {} };
+  store.v.objects.push(o); buildObject(o); applyBackground(); rebuildLights(); store.commit(); select(o.id);
+  if (p.length > 8) toast("Criatura grande: el mundo se agrandó para que quepa. Usa un lente corto (8–18 mm) para verla entera.");
+}
 function addProp(type) {
   const def = ALL_PROPS()[type];
   const t = controls.target;
@@ -977,7 +992,7 @@ function renderPanel() {
   else if (t === "pose") h = panelPose();
   else if (t === "taller") h = T.panelHtml(selObj(), ui, { pill, esc, slider, toggle, HAND_POSES: M.HAND_POSES, SKIN_TONES, GARMENTS, CLOTH_TEX, ACCESSORIES });
   else if (t === "camara") h = panelCamara();
-  else if (t === "pagina") h = pageEd.panelHtml(pill) + `<h3>Página desde una foto</h3><p class="sub">Toma foto o escanea una página tuya: Arnés encuentra las viñetas, su orden de lectura y su proporción, y crea una página nueva con una viñeta vacía por cada recuadro.${aiConf().key ? " Con tu clave, Gemini corrige los recuadros inclinados o sin marco y describe cada viñeta." : ""}</p>
+  else if (t === "pagina") h = pageEd.panelHtml(pill) + `<h3>Página desde una foto</h3><p class="sub">Toma foto o escanea una página tuya: Arnés encuentra las viñetas, su orden de lectura y su proporción, y crea una página nueva con una viñeta vacía por cada recuadro.${aiConf().key ? " Con un servicio de IA, se corrigen los recuadros inclinados o sin marco y se describe cada viñeta." : ""}</p>
     <label class="btn wide filebtn">${ui.pageBusy ? "Leyendo la página…" : "Elegir foto de la página"}<input type="file" id="pagefile" accept="image/*" hidden ${ui.pageBusy ? "disabled" : ""}></label>
     ${ui.pageReport ? `<div class="card calrep">${ui.pageReport.map(l => `<p class="sub">${esc(l)}</p>`).join("")}</div>` : ""}`;
   else h = panelLuz();
@@ -997,13 +1012,13 @@ function panelEscena() {
   const chars = savedChars();
   if (chars.length) h += `<h2>Tus personajes</h2><div class="adds">${chars.map((c, i) => `<button class="btn" data-act="char-add" data-val="${i}">+ ${esc(c.name)}</button>`).join("")}</div>
     <details class="more"><summary>Administrar</summary><div class="adds">${chars.map((c, i) => `<button class="btn danger" data-act="char-del" data-val="${i}">Borrar ${esc(c.name)}</button>`).join("")}</div></details>`;
-  h += `<h2>Agregar</h2><div class="adds"><button class="btn accent" data-act="add-fig">+ Personaje</button>
+  h += `<h2>Agregar</h2><div class="adds"><button class="btn accent" data-act="add-fig">+ Personaje</button><button class="btn accent" data-act="add-creature">+ Criatura</button>
     ${Object.entries(PRIMITIVES).map(([k, d]) => `<button class="btn" data-act="add" data-val="${k}">${d.label}</button>`).join("")}</div>
     <details class="more"><summary>Utilería (${Object.keys(PROPS).length + Object.keys(EXTRA_PROPS).length})</summary><div class="adds">${Object.entries({ ...PROPS, ...EXTRA_PROPS }).map(([k, d]) => `<button class="btn" data-act="add" data-val="${k}">${d.label}</button>`).join("")}</div></details>
     <div class="row"><button class="btn" data-act="import-glb">Importar modelo .glb</button><input type="file" id="glbfile" accept=".glb,.gltf,model/gltf-binary" hidden></div>
     <details class="more"><summary>Escenarios y terreno (${Object.keys(SCENARIOS).length})</summary><p class="sub">Se agregan a esta viñeta como objetos normales: puedes mover o borrar cualquier pieza.</p><div class="adds">${Object.entries(SCENARIOS).map(([k, d]) => `<button class="btn" data-act="scenario" data-val="${k}">${d.label}</button>`).join("")}</div></details>`;
   h += `<h2>En esta viñeta</h2>`;
-  h += v.objects.length ? `<div class="olist">${v.objects.map(o => `<button class="oitem${o.id === ui.sel ? " on" : ""}" data-act="sel" data-val="${o.id}"><span>${esc(o.name)}</span><small>${o.kind === "figure" ? `${o.params.height} cm · ${o.params.heads} cabezas` : (ALL_PROPS()[o.type]?.label || o.type)}</small></button>`).join("")}</div>`
+  h += v.objects.length ? `<div class="olist">${v.objects.map(o => `<button class="oitem${o.id === ui.sel ? " on" : ""}" data-act="sel" data-val="${o.id}"><span>${esc(o.name)}</span><small>${o.kind === "figure" ? `${o.params.height} cm · ${o.params.heads} cabezas` : o.kind === "creature" ? `${C_TPL[o.cparams.template]?.label || "Criatura"} · ${round(o.cparams.length * (o.scale?.[0] || 1), 1)} m` : (ALL_PROPS()[o.type]?.label || o.type)}</small></button>`).join("")}</div>`
     : `<p class="empty">Todavía no hay nada. Agrega un personaje o un objeto.</p>`;
   const o = selObj();
   if (o) h += propsOf(o);
@@ -1018,7 +1033,8 @@ function propsOf(o) {
   let h = `<div class="card"><div class="card-h"><input class="text" data-act="rename" value="${esc(o.name)}" aria-label="Nombre"></div>
   <div class="nums">${num("px", "X", Math.round(o.pos[0] * 100), "cm")}${num("py", "Altura", Math.round(o.pos[1] * 100), "cm")}${num("pz", "Z", Math.round(o.pos[2] * 100), "cm")}</div>
   <div class="nums">${isFig ? num("ry", "Giro", Math.round(o.rotY || 0), "°") : num("rx", "Giro X", Math.round(o.rot[0]), "°") + num("ry", "Giro Y", Math.round(o.rot[1]), "°") + num("rz", "Giro Z", Math.round(o.rot[2]), "°")}</div>`;
-  if (!isFig) {
+  if (o.kind === "creature") h += creaturePanel(o);
+  if (!isFig && o.kind !== "creature") {
     const pp = Object.entries(o.params || {}).filter(([k, val]) => typeof val === "number");
     if (o.type === "humo") h += `<div class="pills">${[["claro", "Humo claro"], ["oscuro", "Humo oscuro"]].map(([k, l]) => pill(k, o.params.tono || "claro", l, "smoke-tone")).join("")}</div><p class="sub">Ponlo sobre un cigarro, una taza o un cañón. Cambia la semilla para otra forma de voluta.</p>`;
     if (o.type === "terreno") h += `<div class="pills">${Object.entries(TERRAIN_TYPES).map(([k, l]) => pill(k, o.params.tipo, l, "terrain")).join("")}</div>`;
@@ -1033,12 +1049,57 @@ function propsOf(o) {
     ${o.sheets?.length ? `<div class="strokestrip sheets">${o.sheets.map((u, i) => `<button class="sheetb" data-act="sheet-del" data-val="${i}" aria-label="Quitar hoja ${i + 1}"><img src="${u}" alt=""><span>×</span></button>`).join("")}</div>` : ""}
     <label class="btn wide filebtn">Subir hojas de modelo (hasta 3)<input type="file" id="sheetfile" accept="image/*" multiple hidden></label>`;
   if (o.type === "modelo") h += `<h3>Aspecto del modelo</h3><div class="pills">${pill("original", o.params?.look === "arcilla" ? "arcilla" : "original", "Sus colores y texturas", "model-look")}${pill("arcilla", o.params?.look === "arcilla" ? "arcilla" : "original", "Arcilla", "model-look")}</div>`;
-  if (!isFig && o.type !== "humo") h += `<h3>Textura</h3><div class="pills">${Object.entries(TEXTURES).map(([k, l]) => pill(k, o.tex || "lisa", l, "obj-tex")).join("")}</div>`;
+  if (o.kind === "creature") h += `<div class="nums">${num("scale", "Escala", Math.round((o.scale?.[0] ?? 1) * 100), "%")}</div>`;
+  if (!isFig && o.type !== "humo" && o.kind !== "creature") h += `<h3>Textura</h3><div class="pills">${Object.entries(TEXTURES).map(([k, l]) => pill(k, o.tex || "lisa", l, "obj-tex")).join("")}</div>`;
   h += `<div class="row colorrow"><label class="sel"><span>${isFig ? "Color de la piel o del maniquí" : "Color (para estilos de color y para separar planos)"}</span><input type="color" data-act="obj-color" value="${o.color || "#bdb6ac"}"></label>${o.color ? `<button class="btn" data-act="obj-nocolor">Quitar color</button>` : ""}</div>`;
   h += `<div class="row"><button class="btn" data-act="dup">Duplicar</button><button class="btn" data-act="fwd">Copiar a viñetas siguientes</button><button class="btn danger" data-act="del">Borrar</button></div></div>`;
   return h;
 }
 
+// ---------------------------------------------------------------- Criaturas
+async function creatureDraw(o) {
+  if (!ui.crSide) return;
+  ui.crBusy = true; renderPanel();
+  try {
+    const r = await creatureFromDrawing(ui.crSide, ui.crFront || null), R = r.report;
+    const keep = { color: o.cparams.color, seed: o.cparams.seed };
+    o.cparams = { ...r.params, ...keep, fromDrawing: `${C_TPL[R.template].label.toLowerCase()}, cabeza a la ${R.head}, cola ${R.tail}% del largo, ${R.legsSeen} patas vistas${ui.crFront ? ", ancho medido de frente" : ""}` };
+    o.cpose = {}; creatureRebuild(o, true); store.commit();
+    toast("Criatura propuesta desde tu dibujo. Afina proporciones, coraza y pose abajo.");
+  } catch (e) { console.warn(e); toast(e.message?.includes("silueta") ? e.message + " Prueba con una foto más contrastada, de perfil." : "No se pudo leer ese dibujo."); }
+  ui.crBusy = false; renderPanel();
+}
+const C_SLIDERS = [
+  ["Tamaño y cuerpo", [["length", "Largo total", 0.1, 60, 0.1, " m"], ["bodyLen", "Torso", 0.2, 3, 0.01], ["bodyH", "Alto del torso", 0.05, 1.2, 0.01], ["bodyW", "Ancho del torso", 0.05, 1.5, 0.01], ["belly", "Panza (plana ↔ redonda)", 0.4, 1.3, 0.01], ["bulk", "Masa en hombros y cadera", 0, 1.5, 0.01]]],
+  ["Cuello, cabeza y cola", [["neckLen", "Cuello", 0, 1.2, 0.01], ["neckW", "Grosor del cuello", 0.2, 1.2, 0.01], ["neckAng", "Inclinación del cuello", -30, 90, 1, "°"], ["headLen", "Cabeza", 0.05, 0.8, 0.01], ["headW", "Ancho de la cabeza", 0.3, 1.6, 0.01], ["snout", "Hocico", 0, 1.5, 0.01], ["brow", "Cejas óseas", 0, 1.5, 0.01], ["teeth", "Dientes", 0, 1.5, 0.01], ["horns", "Cuernos", 0, 3, 1, ""], ["hornLen", "Largo de cuernos", 0.05, 1, 0.01], ["ears", "Orejas", 0, 2, 0.1], ["tailLen", "Cola", 0, 3, 0.01], ["tailW", "Grosor de la cola", 0.1, 1.6, 0.01]]],
+  ["Extremidades", [["legLen", "Largo de patas", 0.1, 1.5, 0.01], ["legW", "Grosor de patas", 0.05, 1, 0.01], ["sprawl", "Patas abiertas (de lado)", 0, 1, 0.01], ["footLen", "Pie", 0.03, 0.5, 0.01], ["claws", "Garras", 0, 6, 1, ""]]],
+  ["Superficie", [["armorSize", "Tamaño de la coraza", 0, 1.5, 0.01], ["spikes", "Púas en el lomo", 0, 1.5, 0.01], ["folds", "Pliegues de piel", 0, 1.5, 0.01], ["seed", "Variación", 1, 99, 1, ""]]],
+];
+function creaturePanel(o) {
+  const p = o.cparams;
+  let h = `<h3>Criatura</h3><div class="pills">${Object.entries(C_TPL).map(([k, d]) => pill(k, p.template, d.label, "c-tpl")).join("")}</div>
+    <p class="sub">Cambiar la plantilla reinicia sus proporciones. Después ajusta todo abajo.</p>
+    <h3>Pares de patas</h3><div class="pills">${[0, 1, 2, 3, 4].map(n => pill(String(n), String(p.legPairs), n ? String(n) : "Sin patas", "c-legs")).join("")}</div>
+    <div class="toggles">${toggle("upright", "Erguida", "Camina en dos patas; el par delantero son brazos", !!p.upright, "c-flag")}${toggle("wings", "Alas", "Un par de alas en el pecho", !!p.wings, "c-flag")}${toggle("fins", "Aletas", "Dorsal y de cola", !!p.fins, "c-flag")}</div>
+    <h3>Piel</h3><div class="pills">${Object.entries(C_SURF).map(([k, l]) => pill(k, p.surface, l, "c-surf")).join("")}</div>
+    <h3>Coraza</h3><div class="pills">${Object.entries(C_ARMOR).map(([k, l]) => pill(k, p.armor, l, "c-armor")).join("")}</div>`;
+  for (const [title, list] of C_SLIDERS) h += `<details class="more"${title === "Tamaño y cuerpo" ? " open" : ""}><summary>${title}</summary>${list.map(([k, l, a, b, st, u = ""]) => slider("c-" + k, l, p[k] ?? 0, a, b, st, u, "creature")).join("")}</details>`;
+  h += `<h3>Pose</h3><div class="pills">${Object.entries(C_POSES).map(([k, l]) => pill(k, "", l, "c-pose")).join("")}</div>`;
+  const g = world.get(o.id), joints = g ? creatureJoints(g) : [], j = joints.includes(ui.cjoint) ? ui.cjoint : null;
+  h += `<details class="more"${j ? " open" : ""}><summary>Articulaciones (${joints.length})</summary><div class="pills small">${joints.map(n => pill(n, j, n.replace(/_/g, " "), "c-joint")).join("")}</div>
+    ${j ? ["Arriba ↔ abajo", "Izquierda ↔ derecha", "Torcer"].map((l, i) => slider("cj" + i, `${j}: ${l}`, o.cpose?.[j]?.[i] || 0, -120, 120, 1, "°", "cjoint")).join("") : `<p class="sub">Elige una articulación para girarla.</p>`}</details>`;
+  h += `<h3>Desde tu dibujo</h3><p class="sub">Una vista de lado (y, si la tienes, una de frente). Arnés separa la silueta del papel, mide largo, alto, grosor a lo largo del cuerpo, cola, cabeza y patas, y propone plantilla y proporciones. Funciona mejor con la criatura completa, de perfil, sin otras figuras cerca.</p>
+    <div class="row"><label class="btn filebtn">Vista de lado<input type="file" id="crside" accept="image/*" hidden></label><label class="btn filebtn">Vista de frente (opcional)<input type="file" id="crfront" accept="image/*" hidden></label></div>
+    ${ui.crSide ? `<p class="sub">Lado: listo${ui.crFront ? " · Frente: listo" : ""}.</p><div class="row"><button class="btn accent" data-act="c-draw"${ui.crBusy ? " disabled" : ""}>${ui.crBusy ? "Midiendo…" : "Proponer criatura"}</button></div>` : ""}
+    ${p.fromDrawing ? `<p class="sub">Propuesta desde tu dibujo: ${esc(p.fromDrawing)}</p>` : ""}`;
+  return h;
+}
+let cTimer = 0;
+function creatureRebuild(o, now = false) {
+  clearTimeout(cTimer);
+  const go = () => { rebuildObject(o); applyBackground(); markDirty(3); };
+  if (now) go(); else cTimer = setTimeout(go, 120);
+}
 function clothesPanel(o) {
   const list = o.clothes || [];
   let h = `<h3>Ropa</h3>`;
@@ -1156,7 +1217,7 @@ async function cropToDataUrl(file, quad, max = 900) {
 }
 async function readVineta(v) {
   const ai = aiConf();
-  if (!ai.key) throw new Error("Pon tu clave de Gemini en Luz → «IA para calibrar».");
+  if (!ai.key) throw new Error("Agrega un servicio que lea en «Servicios de IA» (Luz).");
   if (!cloud.reachable()) throw new Error("La lectura con IA funciona en la versión de GitHub Pages.");
   if (!v.ref) throw new Error("Esta viñeta no tiene dibujo. Crea la página desde una foto o sube la viñeta.");
   v.read = { ...(v.read || {}), scene: await readPanel(v.ref, { key: ai.key, model: ai.model || AI_DEFAULT_MODEL }, buildCatalog()) };
@@ -1343,7 +1404,7 @@ function panelDibujo(v) {
   h += `<label class="btn wide filebtn">${v.ref ? "Cambiar dibujo de la viñeta" : "Subir dibujo de la viñeta"}<input type="file" id="vinfile" accept="image/*" hidden></label>`;
   if (v.read?.descripcion) h += `<p class="sub">${esc(v.read.descripcion)}</p>`;
   if (v.ref) h += `<button class="btn wide" data-act="trace-open">Calcar la pose sobre el dibujo (sin IA)</button><p class="sub">Elige un personaje y arrastra sus puntos (cabeza, manos, pies…) sobre tu dibujo; la pose se ajusta sola.</p>`;
-  if (v.ref) h += `<button class="btn wide" data-act="vin-read" ${ui.readBusy ? "disabled" : ""}>${ui.readBusy ? "Gemini está leyendo el dibujo…" : sc ? "Volver a leer el dibujo" : "Leer el dibujo con Gemini"}</button>`;
+  if (v.ref) h += `<button class="btn wide" data-act="vin-read" ${ui.readBusy ? "disabled" : ""}>${ui.readBusy ? "La IA está leyendo el dibujo…" : sc ? "Volver a leer el dibujo" : "Leer el dibujo con Gemini"}</button>`;
   if (sc) {
     h += `<div class="card calrep"><p class="sub"><strong>Revisa antes de armar.</strong></p>${sceneSummary(sc).map(l => `<p class="sub">${esc(l)}</p>`).join("")}`;
     sc.personajes.forEach((p, i) => {
@@ -1353,7 +1414,7 @@ function panelDibujo(v) {
         <label class="sel"><span>Expresión</span><select data-act="read-expr" data-key="${i}">${Object.entries(M.EXPRESSIONS).map(([k, e]) => `<option value="${k}"${k === p.expresion ? " selected" : ""}>${esc(e.label)}</option>`).join("")}</select></label>
         <button class="btn" data-act="read-drop" data-val="${i}">Quitar este personaje</button></div>`;
     });
-    if (sc.notas) h += `<p class="sub">Gemini: ${esc(sc.notas)}</p>`;
+    if (sc.notas) h += `<p class="sub">IA: ${esc(sc.notas)}</p>`;
     h += `<button class="btn wide accent" data-act="vin-build">Armar la escena</button><p class="sub">Reemplaza lo que haya en esta viñeta. Puedes deshacer.</p></div>`;
   }
   return h;
@@ -1401,10 +1462,10 @@ async function pageFromPhoto(file) {
     for (const pn of pg.panels) { const v = P.vinetas.find(x => x.id === pn.v); if (v?._quad) { v.ref = await cropToDataUrl(file, v._quad); delete v._quad; } }
     P.pages.push(pg); P.curPage = P.pages.length - 1;
     store.commit(); pageEd.draw(); renderPanel();
-    rep.unshift(`${pg.panels.length} viñetas encontradas${via === "ia" ? " con Gemini" : " en el teléfono"}, en orden de lectura ${reading === "manga" ? "manga (de derecha a izquierda)" : "occidental"}. Página en formato ${F.label}.`);
+    rep.unshift(`${pg.panels.length} viñetas encontradas${via === "ia" ? " con IA" : " en el teléfono"}, en orden de lectura ${reading === "manga" ? "manga (de derecha a izquierda)" : "occidental"}. Página en formato ${F.label}.`);
     if (via === "ia") panels.slice(0, 8).forEach((m, i) => m.descripcion && rep.push(`${i + 1}. ${m.plano ? m.plano + ", " : ""}${m.descripcion}`));
-    rep.push("Cada viñeta quedó vacía con su proporción y su dibujo. Abre una viñeta y en Escena → «Desde tu dibujo» Gemini la lee y la arma.");
-    if (via === "local" && pg.panels.length < 2) rep.push("Solo se encontró un recuadro. Si tu página tiene viñetas inclinadas o sin marco, pon tu clave de Gemini para que las encuentre.");
+    rep.push("Cada viñeta quedó vacía con su proporción y su dibujo. Abre una viñeta y en Escena → «Desde tu dibujo» la IA la lee y la arma, o la calcas sin IA.");
+    if (via === "local" && pg.panels.length < 2) rep.push("Solo se encontró un recuadro. Si tu página tiene viñetas inclinadas o sin marco, agrega un servicio en «Servicios de IA» para que las encuentre.");
   } catch (e) { console.error(e); rep.push("No se pudo leer esa foto. Prueba con JPG o PNG, con la página entera y derecha."); }
   ui.pageBusy = false; ui.pageReport = rep; renderPanel();
 }
@@ -1474,7 +1535,7 @@ async function finalStrokes() {
 }
 async function finalAI() {
   const ai = aiConf();
-  if (!ai.key) { toast("Primero pon tu clave de Gemini en «IA para calibrar»."); return; }
+  if (!ai.draw) { toast("Agrega un servicio que dibuje en «Servicios de IA» (Luz)."); return; }
   if (!cloud.reachable()) { toast("El acabado con IA funciona en la versión de GitHub Pages."); return; }
   ui.finalBusy = "ai"; renderPanel();
   try {
@@ -1483,10 +1544,11 @@ async function finalAI() {
     const sheets = store.v.objects.filter(o => o.kind === "figure" && o.sheets?.length).map(o => ({ name: o.name, urls: o.sheets }));
     const src = await aiFinish(canvas, refImage(), ai, "", sheets);
     showFinal(src, refImage() ? "Acabado con IA usando tu página de referencia. Si no te convence, vuelve a intentarlo: cada intento sale distinto." : "Acabado con IA sin referencia. Elige una página tuya para que copie tu estilo.");
-  } catch (e) { toast(e.message || "Gemini no pudo hacer el acabado."); }
+  } catch (e) { toast(e.message || "La IA no pudo hacer el acabado."); }
   ui.finalBusy = null; renderPanel();
 }
-function aiConf() { try { return JSON.parse(localStorage.getItem("arnes-ai") || "{}"); } catch { return {}; } }
+// Compatibilidad: «key» indica que hay algún servicio listo para leer; la cadena real vive en ai.js
+function aiConf() { return { key: aiReady("leer") ? "ok" : "", draw: aiReady("dibujar"), model: "", imageModel: "" }; }
 function writeAi(o) { try { localStorage.setItem("arnes-ai", JSON.stringify(o)); } catch {} }
 async function calibrate(file) {
   ui.calBusy = true; ui.calReport = null; renderPanel();
@@ -1496,7 +1558,7 @@ async function calibrate(file) {
     let name = "", rep = [...report], final = view;
     const ai = aiConf();
     if (ai.key && cloud.reachable()) {
-      try { const r = await analyzeAI(canvas, ai, view); final = r.view; name = r.name; if (r.notes) rep.push("Gemini: " + r.notes); else rep.push("Gemini afinó los parámetros."); }
+      try { const r = await analyzeAI(canvas, ai, view); final = r.view; name = r.name; if (r.notes) rep.push((r.via || "IA") + ": " + r.notes); else rep.push((r.via || "La IA") + " afinó los parámetros."); }
       catch (e) { rep.push(e.message); }
     }
     Object.assign(v, clone(final)); applyBackground(); repaintAll(); store.commit(); markDirty(3);
@@ -1801,24 +1863,28 @@ function panelLuz() {
     <div class="row"><label class="btn filebtn">${ui.strokeBusy ? "Recortando trazos…" : "Subir hoja de trazos"}<input type="file" id="strokefile" accept="image/*" hidden></label>${st.length ? `<button class="btn danger" data-act="strokes-del">Borrar mis trazos</button>` : ""}</div></div>`; })()}
   ${(() => { const L = learnedStyles(), sel = L[ui.learnedSel ?? 0]; return `<div class="card"><p class="sub"><strong>Estilo aprendido</strong> · Sube de 1 a 6 páginas o dibujos de un mismo artista (tuyos o de quien quieras visualizar). Arnés mide su tinta, papel, grosor, rayado y contorno, y redibuja la viñeta así. No usa IA.</p>
     ${L.length ? `<div class="pills">${L.map((st, i) => pill(String(i), String(ui.learnedSel ?? 0), st.name, "learned-sel")).join("")}</div>${sel ? `<p class="sub">${describeStyle(sel).map(esc).join(" ")}</p>` : ""}` : ""}
+    ${sel ? `<details class="more"${ui.lsOpen ? " open" : ""}><summary data-act="ls-open">Ajustar este estilo a mano</summary>
+      <div class="row colorrow"><label class="sel"><span>Tinta</span><input type="color" data-act="ls-col" data-key="ink" value="${sel.ink}"></label><label class="sel"><span>Papel</span><input type="color" data-act="ls-col" data-key="paper" value="${sel.paper}"></label></div>
+      <div class="pills"><span class="pl">Tono</span>${pill("pluma", sel.engine || "pluma", "Rayado de pluma", "ls-engine")}${pill("grabado", sel.engine || "pluma", "Grabado debajo", "ls-engine")}</div>
+      <div class="pills"><span class="pl">Rayado</span>${pill("fijo", sel.follow ? "forma" : "fijo", "En un ángulo", "ls-follow")}${pill("forma", sel.follow ? "forma" : "fijo", "Sigue la forma", "ls-follow")}</div>
+      ${STYLE_PARAMS.map(([k, l, a, b, st]) => slider("ls-" + k, l, +(getParam(sel, k) ?? a), a, b, st, "", "ls-num").replace(`data-key="ls-${k}"`, `data-key="${k}"`)).join("")}
+      <div class="row"><button class="btn" data-act="ls-dup">Guardar como versión nueva</button></div>
+      ${L.length > 1 ? `<p class="sub">Mezclar con otro estilo (la mezcla se guarda como estilo nuevo):</p><div class="pills">${L.map((x, i) => i === (ui.learnedSel ?? 0) ? "" : pill(String(i), String(ui.mixWith ?? ""), x.name, "ls-mixwith")).join("")}</div>
+        ${ui.mixWith !== undefined ? slider("ls-mixt", "Cuánto del otro", ui.mixT ?? 0.5, 0, 1, 0.05, "", "ls-mixt") + `<button class="btn" data-act="ls-mix">Mezclar</button>` : ""}` : ""}
+    </details>` : ""}
     <div class="row"><input class="text" id="learnname" placeholder="Nombre del artista o estilo" aria-label="Nombre del estilo"><label class="btn filebtn">${ui.learnBusy ? "Aprendiendo…" : "Aprender de dibujos"}<input type="file" id="learnfile" accept="image/*" multiple hidden></label>${L.length ? `<button class="btn danger" data-act="learned-del">Borrar este estilo</button>` : ""}</div>
     ${L.length ? `<button class="btn wide accent" data-act="final-learned" ${ui.finalBusy ? "disabled" : ""}>${ui.finalBusy === "learned" ? "Dibujando con su estilo…" : "Render con estilo aprendido"}</button>` : ""}</div>`; })()}
   <button class="btn wide" data-act="final-strokes" ${ui.finalBusy ? "disabled" : ""}>${ui.finalBusy === "strokes" ? "Dibujando trazos…" : "Render de trazos"}</button>
-  <p class="sub">El acabado con IA redibuja la viñeta en tu estilo, con una página tuya de referencia y tu clave de Gemini. Conserva composición, poses y luz; cada imagen la paga tu cuenta y puede variar entre intentos.</p>
+  <p class="sub">El acabado con IA redibuja la viñeta en tu estilo, con una página tuya de referencia y el servicio de IA que elijas. Conserva composición, poses y luz; cada imagen la paga tu cuenta y puede variar entre intentos.</p>
   <label class="btn wide filebtn">${ref ? "Cambiar página de referencia" : "Elegir página de referencia"}<input type="file" id="reffile" accept="image/*" hidden></label>
   ${ref ? `<img class="refthumb" src="${ref}" alt="Página de referencia">` : ""}
-  <button class="btn wide accent" data-act="final-ai" ${ui.finalBusy || !ai.key ? "disabled" : ""}>${ui.finalBusy === "ai" ? "Gemini está dibujando…" : "Acabado con IA"}</button>
-  ${ai.key ? "" : `<p class="sub">Para el acabado con IA, pon tu clave en «IA para calibrar», abajo.</p>`}`;
+  <button class="btn wide accent" data-act="final-ai" ${ui.finalBusy || !ai.draw ? "disabled" : ""}>${ui.finalBusy === "ai" ? "La IA está dibujando…" : "Acabado con IA"}</button>
+  ${ai.draw ? "" : `<p class="sub">Para el acabado con IA, agrega un servicio que dibuje en «Servicios de IA», abajo.</p>`}`;
   h += `<h3>Calibrar desde una página tuya</h3><p class="sub">Sube una foto o escaneo de una página entintada. Arnés lee el papel, la tinta, la mancha de negro y el rayado, y crea un estilo nuevo con eso.</p>
   <label class="btn wide filebtn">${ui.calBusy ? "Leyendo la página…" : "Elegir página"}<input type="file" id="calfile" accept="image/*" hidden ${ui.calBusy ? "disabled" : ""}></label>
   ${ui.calReport ? `<div class="card calrep">${ui.calReport.map(l => `<p class="sub">${esc(l)}</p>`).join("")}</div>` : ""}
-  <details class="more"${ai.key ? "" : ""}><summary>IA para calibrar (opcional, con tu clave)</summary>
-    <p class="sub">Con una clave de Gemini la lectura es más fina y te describe tu trazo. La clave se guarda solo en este dispositivo y cada uso lo paga tu cuenta de Google.${cloud.reachable() ? "" : " La IA funciona en la versión de GitHub Pages."}</p>
-    <label class="fld"><span>Clave de Gemini</span><input class="text" type="password" data-act="ai-key" value="${esc(ai.key || "")}" placeholder="Pégala desde Google AI Studio" autocomplete="off"></label>
-    <label class="fld"><span>Modelo para leer</span><input class="text" data-act="ai-model" value="${esc(ai.model || AI_DEFAULT_MODEL)}"></label>
-    <label class="fld"><span>Modelo de imagen (acabado)</span><input class="text" data-act="ai-imodel" value="${esc(ai.imageModel || AI_IMAGE_MODEL)}"></label>
-    ${ai.key ? `<button class="btn" data-act="ai-forget">Quitar la clave de este dispositivo</button>` : ""}
-  </details>`;
+  <h3>Servicios de IA</h3><p class="sub">${(() => { const r = aiChain("leer"), d = aiChain("dibujar"); return r.length || d.length ? `Leen: ${r.map(x => PROVIDERS[x.provider].label).join(", ") || "ninguno"}. Dibujan: ${d.map(x => PROVIDERS[x.provider].label).join(", ") || "ninguno"}.` : "Ninguno todavía. Con uno, la lectura de páginas y viñetas es más fina y puedes pedir el acabado."; })()}${cloud.reachable() ? "" : " La IA funciona en la versión de GitHub Pages."}</p>
+  <button class="btn wide" data-act="ai-open">Abrir «Servicios de IA»</button>`;
   if (v.mode === "luz") h += `<ul class="legend">${LIGHT_NOTES.map(([l, c]) => `<li><i style="background:${c}"></i>${l}</li>`).join("")}</ul>
     <p class="sub">El terminador es la frontera entre luz y sombra propia: ahí la forma gira y el tono cambia más rápido. La luz reflejada es la que rebota del piso en la sombra.</p>`;
   if (v.mode === "values") h += `<div class="pills"><span class="pl">Tonos</span>${[2, 3, 5].map(n => pill(String(n), String(v.tones), String(n), "tones")).join("")}</div>`;
@@ -1895,6 +1961,14 @@ panel.addEventListener("click", e => {
     case "v-ren": { const n = $("#vname").value.trim(); if (n) { v.name = n; store.commit(); renderPanel(); } break; }
     case "v-del": if (store.deleteVineta()) { store.commit(); rebuildScene(); renderPanel(); } break;
     case "add-fig": addFigure(); break;
+    case "add-creature": addCreature(); break;
+    case "c-tpl": { const keep = { length: o.cparams.length }; o.cparams = newCreatureParams(val); if (C_TPL[val].length === keep.length) Object.assign(o.cparams, keep); o.cpose = {}; creatureRebuild(o, true); store.commit(); renderPanel(); break; }
+    case "c-legs": o.cparams.legPairs = +val; o.cpose = {}; creatureRebuild(o, true); store.commit(); renderPanel(); break;
+    case "c-surf": o.cparams.surface = val; creatureRebuild(o, true); store.commit(); renderPanel(); break;
+    case "c-armor": o.cparams.armor = val; creatureRebuild(o, true); store.commit(); renderPanel(); break;
+    case "c-pose": { const g = world.get(o.id); o.cpose = val === "reposo" ? {} : quickPose(g, val); applyCreaturePose(g, o.cpose); markDirty(3); store.commit(); break; }
+    case "c-joint": ui.cjoint = val; renderPanel(); break;
+    case "c-draw": creatureDraw(o); break;
     case "add": addProp(val); break;
     case "sel": select(val); if (ui.tab === "pose") renderPanel(); break;
     case "sel-light": select(val); break;
@@ -2001,7 +2075,7 @@ panel.addEventListener("click", e => {
     case "drill-start": startDrill(o); break;
     case "clothq": v.view.clothQ = val; rebuildScene(); store.commit(); renderPanel(); markDirty(3); break;
     case "terrain": { o.params.tipo = val; rebuildObject(o); applyBackground(); store.commit(); renderPanel(); markDirty(); break; }
-    case "obj-nocolor": { delete o.color; paint(world.get(o.id), null, true, o.tex); store.commit(); renderPanel(); markDirty(); break; }
+    case "obj-nocolor": { delete o.color; if (o.kind === "creature") setCreatureStyle(world.get(o.id), store.v.view.mode !== "clay", null); else paint(world.get(o.id), null, true, o.tex); store.commit(); renderPanel(); markDirty(); break; }
     case "light-nocolor": { const l = selLight(); delete l.color; rebuildLights(); attachGizmo(); store.commit(); renderPanel(); markDirty(); break; }
     case "gobo": { const l = selLight(); l.gobo = val; if (val !== "ninguno") l.shadow = true; rebuildLights(); attachGizmo(); store.commit(); renderPanel(); markDirty(); break; }
     case "aspect": v.camera.aspect = val; layoutFrame(); store.commit(); renderPanel(); markDirty(); break;
@@ -2027,9 +2101,15 @@ panel.addEventListener("click", e => {
     case "read-drop": { const sc = store.v.read?.scene; if (sc) { sc.personajes.splice(+val, 1); store.commit(); renderPanel(); } break; }
     case "final-strokes": finalStrokes(); break;
     case "final-learned": finalLearned(); break;
-    case "learned-sel": ui.learnedSel = +val; renderPanel(); break;
+    case "learned-sel": ui.learnedSel = +val; ui.mixWith = undefined; renderPanel(); break;
+    case "ls-open": ui.lsOpen = !ui.lsOpen; break;
+    case "ls-engine": case "ls-follow": { const L = learnedStyles(), st = L[ui.learnedSel ?? 0]; if (st) { if (act === "ls-engine") st.engine = val; else st.follow = val === "forma"; writeLearned(L); renderPanel(); } break; }
+    case "ls-dup": { const L = learnedStyles(), st = L[ui.learnedSel ?? 0]; if (st) { const n = { ...clone(st), name: st.name + " v" + (L.filter(x => x.name.startsWith(st.name)).length + 1), at: Date.now() }; L.push(n); writeLearned(L); ui.learnedSel = L.length - 1; renderPanel(); toast(`Versión «${n.name}» guardada.`); } break; }
+    case "ls-mixwith": ui.mixWith = +val; renderPanel(); break;
+    case "ls-mix": { const L = learnedStyles(), a = L[ui.learnedSel ?? 0], b = L[ui.mixWith]; if (a && b) { const m = mixStyles(a, b, ui.mixT ?? 0.5); L.push(m); writeLearned(L); ui.learnedSel = L.length - 1; ui.mixWith = undefined; renderPanel(); toast(`Mezcla «${m.name}» guardada.`); } break; }
     case "learned-del": { const L = learnedStyles(); const [st] = L.splice(ui.learnedSel ?? 0, 1); writeLearned(L); ui.learnedSel = 0; renderPanel(); if (st) toast(`Se borró el estilo «${st.name}».`); break; }
     case "final-ai": finalAI(); break;
+    case "ai-open": openAiWindow(() => renderPanel()); break;
     case "ai-forget": writeAi({ model: aiConf().model }); renderPanel(); toast("Se quitó la clave de este dispositivo."); break;
     case "model-look": { const o = selObj(); if (o) { o.params.look = val; rebuildObject(o); store.commit(); renderPanel(); markDirty(3); } break; }
     case "obj-tex": { const o = selObj(); if (o) { if (val === "lisa") delete o.tex; else o.tex = val; paint(world.get(o.id), o.color || null, !["clay", "grabado"].includes(v.view.mode), o.tex); store.commit(); renderPanel(); markDirty(); } break; }
@@ -2043,9 +2123,17 @@ panel.addEventListener("input", e => {
   const el = e.target, act = el.dataset.act, key = el.dataset.key; if (!act) return;
   if (act === "bl-text") { pageEd.onInput(act, key, 0, el); return; }
   if (/^t-/.test(act)) { tallerInput(el); return; }
+  if (act === "ls-num" || act === "ls-mixt") {
+    const out2 = document.getElementById(el.id + "-o"); if (out2) out2.textContent = fmt(+el.value, +el.step);
+    if (act === "ls-mixt") { ui.mixT = +el.value; return; }
+    const L = learnedStyles(), st = L[ui.learnedSel ?? 0]; if (st) { setParam(st, key, +el.value); clearTimeout(ui.lsT); ui.lsT = setTimeout(() => writeLearned(L), 300); }
+    return;
+  }
   const val = +el.value, out = document.getElementById(el.id + "-o");
   const o = selObj();
   if (out && el.type === "range") out.textContent = fmt(val, +el.step) + (out.textContent.match(/[^\d.\-]+$/)?.[0] || "");
+  if (act === "creature") { o.cparams[key.slice(2)] = val; creatureRebuild(o); return; }
+  if (act === "cjoint") { const j = ui.cjoint, i = +key.slice(2); o.cpose = o.cpose || {}; o.cpose[j] = o.cpose[j] || [0, 0, 0]; o.cpose[j][i] = val; applyCreaturePose(world.get(o.id), o.cpose); markDirty(); return; }
   if (act === "joint-rot") {
     const j = el.dataset.joint, i = +el.dataset.ax, refs = PSEUDO[j]?.joints || [j];
     const raw = val * M.sideSign(refs[0], "xyz"[i]);
@@ -2079,7 +2167,11 @@ panel.addEventListener("input", e => {
 panel.addEventListener("change", e => {
   const el = e.target, act = el.dataset.act, key = el.dataset.key;
   if (/^t-/.test(act)) { tallerChange(el); return; }
+  if (act === "ls-col") { const L = learnedStyles(), st = L[ui.learnedSel ?? 0]; if (st) { st[el.dataset.key] = el.value; writeLearned(L); } return; }
   if (el.id === "glbfile") { importGlb(el.files[0]); el.value = ""; return; }
+  if (el.id === "crside" || el.id === "crfront") { const f = el.files[0]; el.value = ""; if (f) { ui[el.id === "crside" ? "crSide" : "crFront"] = f; renderPanel(); } return; }
+  if (act === "creature" || act === "cjoint") { store.commit(); return; }
+  if (act === "c-flag") { const o2 = selObj(); o2.cparams[key] = el.checked; o2.cpose = {}; creatureRebuild(o2, true); store.commit(); return; }
   if (el.id === "calfile") { const f = el.files[0]; el.value = ""; if (f) calibrate(f); return; }
   if (el.dataset.act === "ui-t") { ui[el.dataset.key] = el.checked; return; }
   if (el.id === "learnfile") {
@@ -2100,6 +2192,7 @@ panel.addEventListener("change", e => {
   if (!act) return;
   const o = selObj(), v = store.v;
   if (pageEd.onChangeEl(act, el)) return;
+  if (act === "obj-color" && o.kind === "creature") { o.color = el.value; setCreatureStyle(world.get(o.id), store.v.view.mode !== "clay", o.color); store.commit(); renderPanel(); markDirty(); return; }
   if (act === "obj-color") { o.color = el.value; paint(world.get(o.id), o.color, store.v.view.mode !== "clay", o.tex); if (store.v.view.mode === "clay") toast("El color se ve en los estilos Color, Cel, Noir, Manga y Valores."); store.commit(); renderPanel(); markDirty(); return; }
   if (act === "garment-color" || act === "garment" || act === "garment-t") {
     const g = o.clothes.find(x => x.id === ui.garment); if (!g) return;

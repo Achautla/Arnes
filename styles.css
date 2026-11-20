@@ -294,3 +294,14 @@ body.drilling #tbar, body.drilling .hud { display: none !important; }
 #trace .kp.side-d { fill: #6ec1ff; }
 #trace .bone { stroke: #ffcf4a; stroke-width: 2.5; opacity: 0.8; }
 #trace .tbar { position: absolute; left: 50%; bottom: -54px; transform: translateX(-50%); display: flex; gap: 8px; align-items: center; background: var(--panel, #1d2023); padding: 6px 10px; border-radius: 10px; white-space: nowrap; }
+
+/* Fase 6: ventanas (servicios de IA, creaturas, objetos) */
+.modal { position: fixed; inset: 0; z-index: 70; background: rgba(10, 11, 12, 0.82); display: flex; align-items: flex-start; justify-content: center; padding: max(12px, env(safe-area-inset-top)) 12px 12px; overflow-y: auto; }
+.modal .sheetbox { background: var(--graphite-2, #1d2023); border: 1px solid var(--line, #33373b); border-radius: 14px; padding: 16px; width: min(720px, 100%); display: grid; gap: 10px; }
+.modal .row.between { justify-content: space-between; align-items: center; }
+.modal summary { cursor: pointer; padding: 6px 0; min-height: 32px; }
+.modal .card { padding: 10px 12px; }
+.modal a { color: var(--blue, #7db4f0); }
+.ailist { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+.ailist li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ailist code { font-size: 12px; color: var(--muted); }

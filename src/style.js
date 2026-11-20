@@ -287,7 +287,7 @@ export async function drawInStyle(line, tone, p, { seed = 7, mask = null, onProg
   if (features) {
     const fw = Math.round(W / 2), fh = Math.round(Hh / 2), F = toneOf(features, fw, fh), Fb = blurF(F, fw, fh, 1);
     const fbg = pct(Array.from(F.filter((_, i) => i % 13 === 0)), 0.98);
-    const inten = Math.min(1, 0.45 + (p.fillFrac || 0) * 1.2 + (p.hatchFrac || 0) * 0.4);
+    const inten = p.featureBold ?? Math.min(1, 0.45 + (p.fillFrac || 0) * 1.2 + (p.hatchFrac || 0) * 0.4);
     const step = Math.max(1.5, width * 0.7 / 2);
     for (let y = 1; y < fh - 1; y += step) for (let x = 1; x < fw - 1; x += step) {
       const xi = x | 0, yi = y | 0, i = yi * fw + xi, t = F[i];
@@ -341,3 +341,24 @@ export async function drawInStyle(line, tone, p, { seed = 7, mask = null, onProg
 }
 
 function hexRgb(h) { const n = parseInt((h || "#222").slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+
+// ------------------------------------------------------------------ parámetros abiertos
+// Cada valor del estilo se puede mover a mano; también se mezclan dos estilos
+export const STYLE_PARAMS = [
+  ["widthRel", "Grosor del trazo", 0.0004, 0.006, 0.0001], ["widthVar", "Presión variable", 0, 1.5, 0.05],
+  ["passes", "Pasadas del contorno", 1, 3, 0.1], ["jitter", "Temblor de la mano", 0, 1, 0.05],
+  ["hatchFrac", "Cuánto raya", 0, 1, 0.02], ["fillFrac", "Negros (manchas)", 0, 1, 0.02],
+  ["hatchAngleDeg", "Ángulo del rayado", 0, 180, 1], ["angleConsistency", "Rayado parejo ↔ libre", 0, 1, 0.05],
+  ["spacingRel", "Separación del rayado", 0.002, 0.03, 0.0005], ["lenRel", "Largo de los trazos", 0.005, 0.1, 0.001],
+  ["featureBold", "Ojos, cejas y cabello oscuros", 0, 1, 0.05],
+];
+export function getParam(p, k) { if (k === "hatchAngleDeg") return Math.round((((p.hatchAngle ?? 1) * 180 / Math.PI) % 180 + 180) % 180); if (k === "featureBold") return p.featureBold ?? Math.min(1, 0.45 + (p.fillFrac || 0) * 1.2 + (p.hatchFrac || 0) * 0.4); return p[k]; }
+export function setParam(p, k, v) { if (k === "hatchAngleDeg") p.hatchAngle = v * Math.PI / 180; else p[k] = v; }
+export function mixStyles(a, b, t = 0.5, name) {
+  const out = { ...a, name: name || `${a.name} + ${b.name}`, pages: (a.pages || 0) + (b.pages || 0), at: Date.now(), mix: [a.name, b.name, t] };
+  for (const [k] of STYLE_PARAMS) { const va = getParam(a, k), vb = getParam(b, k); if (typeof va === "number" && typeof vb === "number") setParam(out, k, va * (1 - t) + vb * t); }
+  const lerpHex = (x, y) => { const A = hexRgb(x), B = hexRgb(y); return "#" + A.map((v, i) => Math.round(v * (1 - t) + B[i] * t).toString(16).padStart(2, "0")).join(""); };
+  out.ink = lerpHex(a.ink, b.ink); out.paper = lerpHex(a.paper, b.paper);
+  out.engine = t < 0.5 ? a.engine : b.engine; out.follow = t < 0.5 ? a.follow : b.follow;
+  return out;
+}

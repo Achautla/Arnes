@@ -38,7 +38,7 @@ export function goboTexture(kind) {
   goboCache[kind] = t; return t;
 }
 
-export function buildLight(def, lowEnd) {
+export function buildLight(def, lowEnd, span = 1) {
   const color = def.color ? new THREE.Color(def.color) : kelvinToColor(def.kelvin);
   let light;
   const size = lowEnd ? 512 : 1024;
@@ -56,12 +56,13 @@ export function buildLight(def, lowEnd) {
     case "sol":
       light = new THREE.DirectionalLight(color, def.intensity);
       light.shadow.mapSize.set(size * 2, size * 2);
-      Object.assign(light.shadow.camera, { left: -4, right: 4, top: 4, bottom: -4, near: 0.5, far: 25 });
+      Object.assign(light.shadow.camera, { left: -4 * span, right: 4 * span, top: 4 * span, bottom: -4 * span, near: 0.5, far: 25 * span });
       break;
     default:
       light = new THREE.HemisphereLight(color, new THREE.Color(0x6b665f), def.intensity);
   }
   light.position.fromArray(def.pos);
+  if (span > 1 && def.type === "sol" && def.target) { const t = new THREE.Vector3().fromArray(def.target); light.position.sub(t).multiplyScalar(span).add(t); }
   if (light.shadow && def.type !== "ambiente") {
     light.castShadow = !!def.shadow;
     light.shadow.radius = 1 + def.softness * 9;

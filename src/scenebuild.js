@@ -1,3 +1,4 @@
+import { askJSON, askImage } from "./ai.js";
 // Viñeta → escena: Gemini lee el dibujo de una viñeta y devuelve una lista estructurada de lo que hay,
 // usando solo piezas del catálogo de Arnés. La app la muestra para revisar y después arma la escena.
 // Además pide los puntos del esqueleto de cada personaje sobre el dibujo, para afinar la pose.
@@ -25,14 +26,7 @@ Responde SOLO un JSON con esta forma:
    "puntos": {${KP.map(k => `"${k}": [x, y]`).join(", ")}} en 0 a 1 sobre la viñeta (x a la derecha, y hacia abajo; izquierda y derecha son las del personaje; omite los que no se ven)}],
  "objetos": [{"tipo": clave, "x": 0 a 1, "base_y": 0 a 1 donde toca el piso, "escala": 0.5 a 2}],
  "notas": una frase en español con lo que no se pudo representar con el catálogo}`;
-  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-    method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-    body: JSON.stringify({ contents: [{ role: "user", parts: [{ inline_data: { mime_type: "image/jpeg", data: dataUrl.split(",")[1] } }, { text: prompt }] }], generationConfig: { responseMimeType: "application/json" } }),
-  });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error((j.error?.message ? "Gemini dice: " + j.error.message.slice(0, 160) + " — " : "") + (r.status === 429 ? "Se acabó tu cuota gratuita de Gemini por hoy o por minuto; espera un poco." : r.status === 400 ? "Gemini no aceptó la clave." : r.status === 404 ? `Gemini no encontró el modelo «${model}».` : "Gemini no respondió. Intenta de nuevo."));
-  const txt = j.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "";
-  let o; try { o = JSON.parse(txt.replace(/^```(json)?|```$/g, "").trim()); } catch { throw new Error("Gemini respondió algo que no se pudo leer. Intenta de nuevo."); }
+  const { json: o } = await askJSON([dataUrl], prompt);
   return sanitize(o, cat);
 }
 

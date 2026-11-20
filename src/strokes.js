@@ -1,3 +1,4 @@
+import { askJSON, askImage } from "./ai.js";
 // Render de trazos: dibuja la viñeta con trazos sueltos de plumilla, uno por uno, en lugar de un patrón.
 // Cada trazo sigue el flujo de la forma (las curvas de igual luz), se afina en las puntas, cambia de
 // presión y tiembla un poco, como una mano. Las capas de rayado cruzado se suman según la sombra.
@@ -128,27 +129,13 @@ export async function drawStrokes(base, tone, { ink = "#2a1d12", spacing = 6, li
 export const AI_IMAGE_MODEL = "gemini-3.1-flash-image";
 export async function aiFinish(render, refDataUrl, { key, imageModel }, notes = "", sheets = []) {
   const toB64 = c => { const k = Math.min(1, 1280 / Math.max(c.width, c.height)); const t = document.createElement("canvas"); t.width = Math.round(c.width * k); t.height = Math.round(c.height * k); t.getContext("2d").drawImage(c, 0, 0, t.width, t.height); return t.toDataURL("image/jpeg", 0.9).split(",")[1]; };
-  const parts = [{ text: "Imagen 1: render 3D de una viñeta de cómic (composición, cámara, poses, luz y sombras ya decididas por el artista)." }, { inline_data: { mime_type: "image/jpeg", data: toB64(render) } }];
-  if (refDataUrl) parts.push({ text: "Imagen 2: página dibujada por el mismo artista, referencia de su estilo." }, { inline_data: { mime_type: "image/jpeg", data: refDataUrl.split(",")[1] } });
-  for (const sh of sheets.slice(0, 4)) for (const u of sh.urls.slice(0, 2)) parts.push({ text: `Hoja de modelo del personaje «${sh.name}»: mantén su cara, peinado, complexión y ropa iguales.` }, { inline_data: { mime_type: "image/jpeg", data: u.split(",")[1] } });
+  const jpg = c => "data:image/jpeg;base64," + toB64(c);
+  const parts = [{ text: "Imagen 1: render 3D de una viñeta de cómic (composición, cámara, poses, luz y sombras ya decididas por el artista)." }, { image: jpg(render) }];
+  if (refDataUrl) parts.push({ text: "Imagen 2: página dibujada por el mismo artista, referencia de su estilo." }, { image: refDataUrl });
+  for (const sh of sheets.slice(0, 4)) for (const u of sh.urls.slice(0, 2)) parts.push({ text: `Hoja de modelo del personaje «${sh.name}»: mantén su cara, peinado, complexión y ropa iguales.` }, { image: u });
   parts.push({ text: `Redibuja la imagen 1 como una viñeta terminada a mano${refDataUrl ? " con el estilo exacto de la imagen 2 (tipo de trazo, rayado, manejo de negros, textura del papel y paleta)" : ", con plumilla y tinta"}. Conserva exactamente la composición, el encuadre, la cantidad de personajes, sus poses, la dirección de la luz y las sombras. Convierte los maniquíes en personas con piel, rasgos y ropa coherentes con la escena. No agregues texto, globos, firmas ni marcos. ${notes}` });
-  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(imageModel || AI_IMAGE_MODEL)}:generateContent`, {
-    method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-    body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { responseModalities: ["TEXT", "IMAGE"] } }),
-  });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    if (r.status === 400 && /api key/i.test(j.error?.message || "")) throw new Error("Gemini no aceptó la clave. Revísala en Google AI Studio.");
-    if (r.status === 404) throw new Error(`Gemini no encontró el modelo de imagen «${imageModel}». Prueba con ${AI_IMAGE_MODEL}.`);
-    const raw = (j.error?.message || "").slice(0, 180);
-    if (r.status === 429 && /limit: 0|free_tier/i.test(raw)) throw new Error("Tu clave está en el nivel gratuito, y los modelos que dibujan imágenes no tienen cuota gratis. Para el acabado con IA hay que activar la facturación en Google AI Studio. Leer dibujos y calibrar sí siguen siendo gratis.");
-    if (r.status === 429) throw new Error("Se acabó tu cuota de imágenes de Gemini por ahora. Espera o revisa tu plan. (" + raw + ")");
-    throw new Error("Gemini no pudo hacer el acabado: " + (raw || "error " + r.status));
-  }
-  const img = j.candidates?.[0]?.content?.parts?.find(p => p.inline_data || p.inlineData);
-  const data = img && (img.inline_data || img.inlineData);
-  if (!data) throw new Error("Gemini respondió sin imagen. Prueba otra vez o cambia la referencia.");
-  return `data:${data.mime_type || data.mimeType || "image/png"};base64,${data.data}`;
+  try { return (await askImage(parts)).url; }
+  catch (e) { if (/limit: 0|free_tier/i.test(e.message)) throw new Error("Tu clave de Gemini está en el nivel gratuito, y dibujar imágenes no tiene cuota gratis. Activa la facturación o agrega otro servicio que dibuje (OpenRouter u OpenAI) en «Servicios de IA»."); throw e; }
 }
 
 // ------------------------------------------------------------------ biblioteca de tus trazos

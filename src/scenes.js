@@ -6,6 +6,7 @@ import { gatherObstacles, deformSkin } from "./contact.js";
 import * as M from "./mannequin.js";
 import { buildProp } from "./props.js";
 import { buildLight } from "./lights.js";
+import { buildCreature, setCreatureStyle } from "./creature.js";
 import { DEG, paint } from "./util.js";
 import { humanReady, attachHuman, humanDims, loadHuman } from "./human.js";
 import { dressHuman, equipHuman, humanShellAcc } from "./humandress.js";
@@ -19,18 +20,31 @@ export function aspectOf(cam, fallback = 4 / 3) {
 export function frameFov(cam) { return 2 * Math.atan(12 / cam.mm) * THREE.MathUtils.RAD2DEG; }
 
 // Fondo y niebla según la vista (papel u oscuro, y atmósfera)
-export function applyAtmosphere(scene, view) {
+// Tamaño del mundo: con criaturas colosales o escenarios grandes, la niebla, las sombras y la cámara se estiran
+export function sceneSpan(objects = []) {
+  let s = 1;
+  for (const o of objects) {
+    const sc = Math.max(...(o.scale || [1, 1, 1]).map(Math.abs));
+    if (o.kind === "creature") s = Math.max(s, (o.cparams?.length || 2) * sc / 4);
+    else if (o.kind === "prop") s = Math.max(s, sc / 3, Math.hypot(o.pos[0], o.pos[2]) / 12);
+  }
+  return Math.min(s, 120);
+}
+export function applyAtmosphere(scene, view, span = 1) {
   const dark = view.background === "oscuro";
   const c = new THREE.Color(dark ? DARK : PAPER);
   scene.background = c;
   const f = view.fog || 0;
   const near = (dark ? 10 : 14) * (1 - f * 0.9), far = (dark ? 30 : 42) * (1 - f * 0.8);
-  scene.fog = new THREE.Fog(c, Math.max(0.5, near), Math.max(near + 2, far));
+  scene.fog = new THREE.Fog(c, Math.max(0.5, near * span), Math.max(near * span + 2, far * span));
 }
 
 export function buildObject3D(o) {
   let g, fig = null;
-  if (o.kind === "figure") {
+  if (o.kind === "creature") {
+    g = buildCreature(o);
+    g.position.fromArray(o.pos); g.rotation.set(...(o.rot || [0, 0, 0]).map(d => d * DEG)); g.scale.fromArray(o.scale || [1, 1, 1]);
+  } else if (o.kind === "figure") {
     const real = o.human && humanReady();
     if (o.human && !real) loadHuman().then(() => dispatchEvent(new Event("arnes-model"))).catch(() => {});
     fig = M.buildFigure(real ? { ...o.params, dims: humanDims(o.human) } : o.params);
@@ -74,19 +88,21 @@ export function applyConstraints(objects, figs, world, cameraPos) {
 export function sceneFor(v, { lowEnd = true, mode } = {}) {
   const scene = new THREE.Scene();
   const view = v.view;
-  applyAtmosphere(scene, view);
+  const span = sceneSpan(v.objects);
+  applyAtmosphere(scene, view, span);
   const content = new THREE.Group(); scene.add(content);
   const figs = new Map(), world = new Map();
   const useColor = (mode || view.mode) !== "clay";
   let hideFloor = false;
   for (const o of v.objects) {
     const { g, fig } = buildObject3D(o);
-    if (o.color || o.tex) paint(g, o.color || null, useColor && (mode || view.mode) !== "grabado", o.tex);
+    if (o.kind === "creature") setCreatureStyle(g, useColor && (mode || view.mode) !== "grabado", o.color);
+    else if (o.color || o.tex) paint(g, o.color || null, useColor && (mode || view.mode) !== "grabado", o.tex);
     if (g.userData.hidesFloor) hideFloor = true;
     content.add(g); world.set(o.id, g); if (fig) { fig.root.userData.isFigure = true; figs.set(o.id, fig); }
   }
   if (view.floor !== false && !hideFloor) {
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), new THREE.MeshStandardMaterial({ color: PAPER, roughness: 1 }));
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(80 * span, 80 * span), new THREE.MeshStandardMaterial({ color: PAPER, roughness: 1 }));
     floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
   }
   if (!v.lights?.length) { // viñetas viejas sin luces: luz de cortesía para que no salgan negras
@@ -94,11 +110,11 @@ export function sceneFor(v, { lowEnd = true, mode } = {}) {
     scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8070, 1.1), sun);
   }
   for (const def of v.lights || []) {
-    const L = buildLight(def, lowEnd);
+    const L = buildLight(def, lowEnd, span);
     scene.add(L); if (L.target) scene.add(L.target);
   }
   const cam = v.camera;
-  const camera = new THREE.PerspectiveCamera(frameFov(cam), aspectOf(cam), 0.03, 200);
+  const camera = new THREE.PerspectiveCamera(frameFov(cam), aspectOf(cam), 0.03 * Math.sqrt(span), 200 * span);
   camera.position.fromArray(cam.pos);
   camera.lookAt(new THREE.Vector3(...cam.target));
   if (cam.roll) camera.rotateZ(cam.roll * DEG);

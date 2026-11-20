@@ -1,3 +1,4 @@
+import { askJSON, askImage } from "./ai.js";
 // Leer una página desde una foto: encontrar los recuadros de las viñetas y su orden de lectura.
 // Primero en el teléfono (cortes por calles blancas, gratis y sin internet); si la página tiene viñetas
 // inclinadas, sin marco o encimadas, Gemini corrige los recuadros y describe cada viñeta.
@@ -104,18 +105,13 @@ export async function detectAI(canvas, { key, model }, reading = "occidental") {
   const prompt = `Esta es la foto de una página de cómic. Encuentra cada viñeta (recuadro con dibujo), incluso si está inclinada o no tiene marco.
 Responde SOLO un JSON: {"lectura": "occidental" o "manga", "vinetas": [{"box_2d": [ymin, xmin, ymax, xmax] normalizado de 0 a 1000, "orden": número de lectura empezando en 1, "plano": "general|conjunto|americano|medio|primer plano|detalle", "angulo": "normal|picado|contrapicado|cenital|holandés", "personajes": número de personajes, "descripcion": una frase en español de lo que pasa}]}.
 Si la página se lee de derecha a izquierda, usa "manga". La lectura que eligió el artista es: ${reading}.`;
-  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-    method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-    body: JSON.stringify({ contents: [{ role: "user", parts: [{ inline_data: { mime_type: "image/jpeg", data: t.toDataURL("image/jpeg", 0.85).split(",")[1] } }, { text: prompt }] }], generationConfig: { responseMimeType: "application/json" } }),
-  });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error((j.error?.message ? "Gemini dice: " + j.error.message.slice(0, 160) + " — " : "") + (r.status === 429 ? "Se acabó tu cuota gratuita de Gemini por hoy o por minuto; espera un poco." : r.status === 400 ? "Gemini no aceptó la clave." : "Gemini no respondió; se usó la lectura local."));
-  const txt = j.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "";
-  let o; try { o = JSON.parse(txt.replace(/^```(json)?|```$/g, "").trim()); } catch { throw new Error("Gemini respondió algo que no se pudo leer; se usó la lectura local."); }
+  let o;
+  try { ({ json: o } = await askJSON([t.toDataURL("image/jpeg", 0.85)], prompt)); }
+  catch (e) { throw new Error(e.message + " Se usó la lectura local."); }
   const list = (o.vinetas || []).filter(v => Array.isArray(v.box_2d) && v.box_2d.length === 4)
     .sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0))
     .map(v => { const [y0, x0, y1, x1] = v.box_2d.map(n => Math.min(1000, Math.max(0, +n)) / 1000); const rw = Math.max(0.02, x1 - x0), rh = Math.max(0.02, y1 - y0); return { rect: [x0, y0, rw, rh], quad: [[x0, y0], [x0 + rw, y0], [x0 + rw, y0 + rh], [x0, y0 + rh]], plano: v.plano, angulo: v.angulo, personajes: v.personajes, descripcion: v.descripcion }; });
-  if (!list.length) throw new Error("Gemini no encontró viñetas; se usó la lectura local.");
+  if (!list.length) throw new Error("La IA no encontró viñetas; se usó la lectura local.");
   return { panels: list, reading: o.lectura === "manga" ? "manga" : "occidental" };
 }
 
