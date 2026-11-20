@@ -182,3 +182,14 @@ Concepto, módulos, fases y especificación de la Fase 1: https://claude.ai/arti
 - Nariz rota u otras asimetrías del rostro (falta empaquetar las deformaciones asimétricas).
 - Al cambiar un personaje sentado por uno de otra estatura, la pose puede necesitar un reajuste.
 - El bucket «modelos» de Supabase para llevar los .glb a otros dispositivos (requiere tu aprobación).
+
+## Cierre de pendientes de la Fase 5 (19-nov, noche)
+
+- **Ropa:** cuellos parejos (redondo, V, camisa, alto, abierto), pliegues que dependen de la pose (codos, rodillas, cintura, regazo y axilas) y caída cerca de los dobladillos. Faldas y abrigos con pliegues verticales.
+- **Brazo amputado:** la manga puede quedar vacía, doblada y prendida con un alfiler, o recortada (con prótesis, recortada por defecto).
+- **Cabello y vello:** mechones de cinta que salen del cuero cabelludo siguiendo el remolino; barba con pelo. El generador `strands()` sirve también para el pelaje de las criaturas.
+- **Esculpir con el dedo** (Taller → Esculpir): inflar, desinflar, alisar, pellizcar y arrastrar, con simetría. Se guarda en la ficha como diferencias comprimidas.
+- **Lados por separado y asimetrías:** brazos, piernas, ojos, orejas y mejillas con control izquierdo y derecho; 23 asimetrías del rostro (nariz torcida incluida).
+- **Cambiar de cuerpo sentado:** conserva la altura del asiento y la posición de los pies; de pie, los pies en el piso.
+- **Estilo aprendido:** ojos, cejas, cabello y barba oscuros se rellenan con trazo corto que sigue su forma.
+- **Modelos .glb:** se comprimen en el teléfono (texturas WebP, geometría Meshopt): el tiburón pasa de 4.9 a 0.5 MB y el ratón de 24.5 a 3.4 MB. Se aceptan hasta 200 MB antes de comprimir. Para llevarlos a otros dispositivos: `data/supabase-modelos.sql`.

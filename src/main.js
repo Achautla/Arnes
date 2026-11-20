@@ -22,10 +22,11 @@ import { dress, GARMENTS, MATERIALS, FOLD_TYPES, newGarment, HAIR_STYLES, CLOTH_
 import { equip, ACCESSORIES, MATERIALS as ACC_MATS, FINGER_NAMES, newAccessory } from "./accessories.js";
 import * as cloud from "./cloud.js";
 import { putModel, syncUp as modelSyncUp, MAX_MODEL, externalizeModels, inlineModels } from "./models.js";
+import { optimizeGlb } from "./glbopt.js";
 import { analyzeLocal, analyzeAI, AI_DEFAULT_MODEL } from "./calibrate.js";
 import { drawStrokes, aiFinish, AI_IMAGE_MODEL, extractStrokes, loadBrushes } from "./strokes.js";
 import { makeVideo } from "./video.js";
-import { loadHuman, humanReady, attachHuman, humanDims, DEFAULT_HUMAN, yearsToAge, ageToYears } from "./human.js";
+import { loadHuman, humanReady, attachHuman, humanDims, DEFAULT_HUMAN, yearsToAge, ageToYears, sculptAt, encodeSculpt } from "./human.js";
 import { dressHuman, equipHuman, humanShellAcc } from "./humandress.js";
 import * as T from "./taller.js";
 import { learnStyle, drawInStyle, describeStyle } from "./style.js";
@@ -177,7 +178,7 @@ function dressFig(o, fig) {
   if (fig.human) {
     fig.dress?.dispose();
     const sa = humanShellAcc(o.accessories);
-    fig.dress = dressHuman(fig, o.clothes || [], { hair: o.hair, facial: o.human.facial, footwear: sa.footwear || o.human.footwear, footColor: sa.footColor, gloves: sa.gloves, useColor: v.mode !== "clay" });
+    fig.dress = dressHuman(fig, o.clothes || [], { hair: o.hair, facial: o.human.facial, sleeves: o.human.sleeves, prosthesis: o.human.prosthesis, footwear: sa.footwear || o.human.footwear, footColor: sa.footColor, gloves: sa.gloves, useColor: v.mode !== "clay" });
     fig.root.traverse(c => { c.userData.objId = o.id; });
     return;
   }
@@ -492,6 +493,41 @@ function setNdc(e) {
   ray.setFromCamera(ndc, camera);
 }
 function handlesActive() { const o = selObj(); return ui.tab === "pose" && o?.kind === "figure" && !ui.through; }
+// ---------------------------------------------------------------- Taller: esculpir con el dedo sobre el cuerpo
+let sculpting = null;
+const sculptOn = () => ui.tab === "taller" && ui.tsec === "escultura";
+renderer.domElement.addEventListener("pointerdown", e => {
+  if (!sculptOn()) return;
+  const o = selObj(), fig = o && figs.get(o.id); if (!fig?.human) return;
+  setNdc(e); const hit = ray.intersectObject(fig.human.mesh, false)[0]; if (!hit) return;
+  e.stopImmediatePropagation(); e.preventDefault();
+  sculpting = { o, fig, id: e.pointerId, plane: new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()), hit.point), last: hit.point.clone(), t: 0 };
+  renderer.domElement.setPointerCapture(e.pointerId); controls.enabled = false;
+  ui.sculpt ??= { tool: "inflar", radius: 0.03, strength: 0.5, sym: true };
+  if (ui.sculpt.tool !== "arrastrar") sculptAt(fig.human, hit, ui.sculpt); markDirty();
+}, { capture: true });
+renderer.domElement.addEventListener("pointermove", e => {
+  if (!sculpting || e.pointerId !== sculpting.id) return;
+  e.stopImmediatePropagation();
+  const now = performance.now(); if (now - sculpting.t < 30) return; sculpting.t = now;
+  setNdc(e);
+  const { fig } = sculpting, hit = ray.intersectObject(fig.human.mesh, false)[0];
+  const p = new THREE.Vector3(); if (!ray.ray.intersectPlane(sculpting.plane, p)) return;
+  if (ui.sculpt.tool === "arrastrar") { const h = hit || { face: null }; if (sculpting.hit0 ??= hit) sculptAt(fig.human, sculpting.hit0, ui.sculpt, p.clone().sub(sculpting.last)); }
+  else if (hit) sculptAt(fig.human, hit, ui.sculpt);
+  sculpting.last.copy(p); markDirty();
+}, { capture: true });
+function endSculpt(e) {
+  if (!sculpting || (e && e.pointerId !== sculpting.id)) return false;
+  const { o, fig } = sculpting; sculpting = null; controls.enabled = true;
+  const enc = encodeSculpt(fig.human);
+  if (enc) o.human.sculpt = enc; else delete o.human.sculpt;
+  applyChar(o); store.commit();
+  return true;
+}
+renderer.domElement.addEventListener("pointerup", e => { if (endSculpt(e)) { e.stopImmediatePropagation(); press = null; } }, { capture: true });
+renderer.domElement.addEventListener("pointercancel", e => endSculpt(e), { capture: true });
+
 renderer.domElement.addEventListener("pointerdown", e => {
   press = { x: e.clientX, y: e.clientY, t: performance.now() };
   if (!desktop.matches) document.body.classList.remove("sheet-open");
@@ -775,14 +811,22 @@ function addProp(type) {
 }
 async function importGlb(f) {
   if (!f) return;
-  if (f.size > MAX_MODEL) { toast(`El modelo pesa ${Math.round(f.size / 1e6)} MB; el máximo es ${MAX_MODEL / 1e6} MB. Reduce sus texturas (por ejemplo a 2048 px) y vuelve a exportarlo.`); return; }
+  if (f.size > 200e6) { toast(`El modelo pesa ${Math.round(f.size / 1e6)} MB; Arnés acepta hasta 200 MB antes de comprimir.`); return; }
+  // se comprime en el teléfono antes de guardarlo: texturas WebP y geometría Meshopt
+  let blob = f, note = "";
+  try {
+    toast("Comprimiendo el modelo…");
+    const r = await optimizeGlb(await f.arrayBuffer(), { onStep: m => toast(m) });
+    if (!r.skipped && r.data.byteLength < f.size) { blob = new Blob([r.data], { type: "model/gltf-binary" }); note = ` Comprimido de ${(f.size / 1e6).toFixed(1)} a ${(blob.size / 1e6).toFixed(1)} MB.`; }
+  } catch (e) { console.warn(e); note = " No se pudo comprimir; se guardó como venía."; }
+  if (blob.size > MAX_MODEL) { toast(`Aun comprimido pesa ${Math.round(blob.size / 1e6)} MB; el máximo es ${MAX_MODEL / 1e6} MB.`); return; }
   let id;
-  try { id = await putModel(f); } catch { toast("Este navegador no dejó guardar el modelo. Libera espacio o prueba en otro navegador."); return; }
+  try { id = await putModel(blob); } catch { toast("Este navegador no dejó guardar el modelo. Libera espacio o prueba en otro navegador."); return; }
   const t = controls.target;
   const o = { id: uid("p"), kind: "prop", type: "modelo", name: f.name.replace(/\.(glb|gltf)$/i, ""), pos: [round(t.x, 2), 0, round(t.z, 2)], rot: [0, 0, 0], scale: [1, 1, 1], params: { src: "glb:" + id, owner: cloud.user()?.id || null, look: "original" } };
   store.v.objects.push(o); buildObject(o); store.commit(); select(o.id);
-  const heavy = f.size > 20e6 ? " Es pesado: en teléfonos puede tardar en abrir." : "";
-  toast("Modelo importado con sus colores y texturas." + heavy + " Si se ve muy grande o pequeño, cambia su escala.");
+  const heavy = blob.size > 20e6 ? " Es pesado: en teléfonos puede tardar en abrir." : "";
+  toast("Modelo importado con sus colores y texturas." + note + heavy + " Si se ve muy grande o pequeño, cambia su escala.");
   syncModel(id);
 }
 // Sube el .glb a la nube para abrirlo en otros dispositivos (el proyecto solo guarda su huella)
@@ -1488,7 +1532,33 @@ function syncChar(o) {
     if (vin === store.v) rebuildObject(f);
   }
 }
-function applyChar(o) { rebuildObject(o); syncChar(o); buildRuler(); markDirty(3); }
+// Al cambiar de cuerpo se conserva cómo estaba apoyado: sentado a la misma altura y con los pies donde estaban;
+// de pie, con los pies en el piso
+function bodySnapshot(o) {
+  const f = figs.get(o.id); if (!f || o.kind !== "figure") return null;
+  f.root.updateMatrixWorld(true);
+  const P = n => new THREE.Vector3().setFromMatrixPosition(f.joints[n].matrixWorld);
+  const thigh = P("knee_L").sub(P("hip_L")).normalize().add(P("knee_R").sub(P("hip_R")).normalize()).normalize();
+  const up = new THREE.Vector3(0, 1, 0);
+  return { hips: P("hips"), ankles: { L: P("ankle_L"), R: P("ankle_R") }, seated: thigh.dot(up) > -0.55, seat: f.d.seat ?? 0.09 * f.d.H, lowest: M.lowestPoint(f) };
+}
+function refitBody(o, before) {
+  const f = figs.get(o.id); if (!f || !before) return;
+  f.root.updateMatrixWorld(true);
+  if (before.seated) {
+    const now = new THREE.Vector3().setFromMatrixPosition(f.joints.hips.matrixWorld), seat = f.d.seat ?? 0.09 * f.d.H;
+    M.moveHips(f, new THREE.Vector3(0, (before.hips.y - before.seat) - (now.y - seat), 0));
+    for (const S of ["L", "R"]) { const t = before.ankles[S].clone(); t.y = Math.max(t.y, 0.045 * hScale(f)); M.solveIK(f, `ankle_${S}`, t, o.relaxed); }
+  } else if (before.lowest < 0.05) groundFigure(f);
+  o.pose = M.readPose(f, o.pose);
+  rebuildObject(o);
+}
+function applyChar(o, keepContact = true) {
+  const before = keepContact ? bodySnapshot(o) : null;
+  rebuildObject(o);
+  if (before && o.kind === "figure" && figs.get(o.id)?.human) refitBody(o, before);
+  syncChar(o); buildRuler(); markDirty(3);
+}
 let tallerTimer = 0;
 function tallerClick(act, val, el) {
   if (act === "t-add") {
@@ -1498,7 +1568,6 @@ function tallerClick(act, val, el) {
   const o = selObj(); if (!o || o.kind !== "figure") return;
   const r = T.click(o, act, val, el, ui, { newGarment, newAccessory, handPoseRot: M.handPoseRot });
   if (r.rebuild) applyChar(o);
-  if (r.ground) { const f = figs.get(o.id); if (f) { groundFigure(f); o.pose = M.readPose(f, o.pose); } }
   if (r.sync) syncChar(o);
   if (r.save) {
     const c = { name: o.name }; for (const k of CHAR_KEYS) if (o[k] !== undefined) c[k] = clone(o[k]);
@@ -1515,6 +1584,7 @@ function tallerInput(el) {
   const out = document.getElementById(el.id + "-o");
   if (el.type === "range") {
     if (out) out.textContent = fmt(+el.value, +el.step);
+    if (el.dataset.act === "t-sc") { ui.sculpt[el.dataset.key] = el.dataset.key === "radius" ? +el.value / 100 : +el.value; return; }
     if (T.input(o, el.dataset.act, el.dataset.key, +el.value)) {
       clearTimeout(tallerTimer);
       tallerTimer = setTimeout(() => { rebuildObject(o); markDirty(3); }, 90);
@@ -1528,6 +1598,9 @@ function tallerChange(el) {
   else if (act === "t-hair-c") { o.hair ??= { style: "corto" }; o.hair.color = el.value; }
   else if (act === "t-gcolor") { const gm = o.clothes?.find(x => x.id === key); if (gm) gm.color = el.value; }
   else if (act === "t-local") { o.localChar = el.checked; if (!el.checked) syncChar(o); store.commit(); return; }
+  else if (act === "t-lr") { ui.tLR = el.checked; renderPanel(); return; }
+  else if (act === "t-sym") { ui.sculpt.sym = el.checked; return; }
+  else if (act === "t-sc") { ui.sculpt[key] = key === "radius" ? +el.value / 100 : +el.value; return; }
   clearTimeout(tallerTimer);
   applyChar(o); store.commit();
   if (el.type === "range" && /age|headScale/.test(key || "")) renderPanel();

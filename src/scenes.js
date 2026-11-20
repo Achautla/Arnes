@@ -112,7 +112,7 @@ export function sceneFor(v, { lowEnd = true, mode } = {}) {
     if (fig?.human) {
       fig.human.setStyle(useColor, o.color, o.hair?.color);
       const sa = humanShellAcc(o.accessories);
-      fig.dress = dressHuman(fig, o.clothes || [], { hair: o.hair, facial: o.human.facial, footwear: sa.footwear || o.human.footwear, footColor: sa.footColor, gloves: sa.gloves, useColor });
+      fig.dress = dressHuman(fig, o.clothes || [], { hair: o.hair, facial: o.human.facial, sleeves: o.human.sleeves, prosthesis: o.human.prosthesis, footwear: sa.footwear || o.human.footwear, footColor: sa.footColor, gloves: sa.gloves, useColor });
       if (o.accessories?.length) fig.acc = equipHuman(fig, o.accessories, { useColor }, equip);
       fig.root.traverse(c => { c.userData.objId = o.id; });
       continue;

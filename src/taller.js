@@ -1,8 +1,8 @@
 // Taller de personajes: la ficha de cada personaje (cuerpo, rostro, extremidades, manos, piel, cabello y vestuario)
-import { DEFAULT_HUMAN, LIMB_LEVELS, PROSTHESES, MARKS, BEARDS, MOUSTACHES, ageToYears, yearsToAge } from "./human.js";
+import { DEFAULT_HUMAN, LIMB_LEVELS, PROSTHESES, MARKS, BEARDS, MOUSTACHES, SCULPT_TOOLS, ageToYears, yearsToAge, humanData } from "./human.js";
 import { HUMAN_HAIR, FOOTWEAR } from "./humandress.js";
 
-export const SECTIONS = { personajes: "Personajes", cuerpo: "Cuerpo", cara: "Rostro", extremidades: "Extremidades", manos: "Manos", piel: "Piel", cabello: "Cabello", vestuario: "Vestuario", ficha: "Ficha" };
+export const SECTIONS = { personajes: "Personajes", cuerpo: "Cuerpo", cara: "Rostro", escultura: "Esculpir", extremidades: "Extremidades", manos: "Manos", piel: "Piel", cabello: "Cabello", vestuario: "Vestuario", ficha: "Ficha" };
 
 // Controles de forma (MakeHuman). Cada uno va de −1 a 1
 export const BODY_GROUPS = {
@@ -19,6 +19,7 @@ export const FACE_GROUPS = {
   "Boca": [["boca_ancho", "Ancho"], ["labio_sup", "Labio superior"], ["labio_inf", "Labio inferior"], ["boca_arco", "Arco de cupido"], ["boca_comisuras", "Comisuras"], ["boca_adelante", "Boca hacia adelante"], ["boca_surcos", "Surcos de la risa"], ["boca_hoyuelos", "Hoyuelos"]],
   "Mandíbula y mejillas": [["mandibula_hueso", "Ángulo de la mandíbula"], ["mandibula_adelante", "Mandíbula adelantada"], ["mandibula_caida", "Mandíbula caída"], ["menton_ancho", "Ancho del mentón"], ["menton_alto", "Alto del mentón"], ["menton_prominente", "Mentón prominente"], ["menton_hendido", "Mentón partido"], ["pomulos", "Pómulos"], ["mejillas", "Mejillas"], ["mejilla_interna", "Mejilla hundida ↔ llena"]],
   "Orejas": [["orejas_tamano", "Tamaño"], ["orejas_abiertas", "Abiertas"], ["orejas_lobulo", "Lóbulo"], ["orejas_giro", "Giro"], ["orejas_puntiagudas", "Puntiagudas"]],
+  "Asimetrías (izquierda ↔ derecha)": [["asim_nariz_1", "Nariz torcida"], ["asim_nariz_2", "Tabique"], ["asim_nariz_3", "Punta de la nariz"], ["asim_nariz_4", "Aleta de la nariz"], ["nariz_lado", "Nariz hacia un lado"], ["asim_boca_1", "Boca"], ["asim_boca_2", "Comisura"], ["asim_mandibula_1", "Mandíbula"], ["asim_mandibula_2", "Quijada"], ["asim_mandibula_3", "Mentón"], ["asim_ojo_1", "Ojo: altura"], ["asim_ojo_2", "Ojo: tamaño"], ["asim_ojo_3", "Ojo: párpado"], ["asim_ojo_4", "Ojo: inclinación"], ["asim_ceja_1", "Ceja"], ["asim_ceja_2", "Hueso de la ceja"], ["asim_mejilla_1", "Pómulo"], ["asim_mejilla_2", "Mejilla"], ["asim_oreja_1", "Oreja: altura"], ["asim_oreja_2", "Oreja: forma"], ["asim_sien_1", "Sien"], ["asim_craneo_1", "Cráneo"], ["asim_tronco", "Tronco"]],
 };
 export const HAND_GROUP = [["manos_tamano", "Tamaño de manos"], ["dedos_largo", "Largo de dedos"], ["dedos_grosor", "Grosor de dedos"]];
 
@@ -62,7 +63,15 @@ export function panelHtml(o, ui, H) {
   h += `<div class="pills tsec">${Object.entries(SECTIONS).map(([k, l]) => pill(k, ui.tsec, l, "t-sec")).join("")}</div>`;
   const hu = o.human, s = hu.s || {};
   const sl = (key, label, val, min = -1, max = 1, step = 0.05, act = "t-s") => H.slider(`t:${act}:${key}`, label, val, min, max, step, "", act).replace(`data-key="t:${act}:${key}"`, `data-key="${key}"`);
-  const groups = G => Object.entries(G).map(([name, list]) => `<details class="more"${ui.topen === name ? " open" : ""}><summary data-act="t-open" data-val="${esc(name)}">${esc(name)}</summary>${list.map(([k, l]) => sl(k, l, s[k] || 0, k.startsWith("cabeza_") && !/alto|ancho|fondo|gordura|edad/.test(k) ? 0 : -1)).join("")}</details>`).join("");
+  const known = new Set(humanData()?.sliders || []);
+  const row = (k, l) => {
+    const min = k.startsWith("cabeza_") && !/alto|ancho|fondo|gordura|edad/.test(k) ? 0 : -1;
+    // por lado: cuando la simetría está apagada y hay versión izquierda/derecha
+    if (ui.tLR && known.has(k + "_L")) return sl(k + "_L", l + " · izq.", s[k + "_L"] || 0, min) + sl(k + "_R", l + " · der.", s[k + "_R"] || 0, min);
+    return sl(k, l, s[k] || 0, min);
+  };
+  const groups = G => `<div class="toggles">${H.toggle("tLR", "Lados por separado", "Brazos, piernas, ojos, orejas y mejillas con control izquierdo y derecho", !!ui.tLR, "t-lr")}</div>` +
+    Object.entries(G).map(([name, list]) => `<details class="more"${ui.topen === name ? " open" : ""}><summary data-act="t-open" data-val="${esc(name)}">${esc(name)}</summary>${list.map(([k, l]) => row(k, l)).join("")}</details>`).join("");
   const sec = ui.tsec;
   if (sec === "personajes") {
     const byGroup = {};
@@ -79,12 +88,21 @@ export function panelHtml(o, ui, H) {
     const r = hu.race || DEFAULT_HUMAN.race;
     h += groups(FACE_GROUPS) + `<details class="more"><summary>Mezcla de partida</summary><p class="sub">MakeHuman trae tres promedios de rasgos para empezar (africano, asiático y europeo). Son solo un punto de partida: cada rostro lo terminas con los controles de arriba.</p>
       ${["Africano", "Asiático", "Europeo"].map((l, i) => sl("race" + i, l, r[i], 0, 1, 0.01, "t-race")).join("")}</details>`;
+  } else if (sec === "escultura") {
+    const sc = ui.sculpt ??= { tool: "inflar", radius: 0.03, strength: 0.5, sym: true };
+    h += `<p class="sub">Toca y arrastra sobre el cuerpo en el visor. Lo esculpido se guarda en la ficha y la ropa se vuelve a ajustar al soltar. Para girar la vista, cambia a otra sección.</p>
+      <div class="pills">${Object.entries(SCULPT_TOOLS).map(([k, l]) => pill(k, sc.tool, l, "t-tool")).join("")}</div>
+      ${H.slider("t-rad", "Tamaño del pincel (cm)", Math.round(sc.radius * 100), 1, 15, 0.5, "", "t-sc").replace('data-key="t-rad"', 'data-key="radius"')}
+      ${H.slider("t-str", "Fuerza", sc.strength, 0.05, 1, 0.05, "", "t-sc").replace('data-key="t-str"', 'data-key="strength"')}
+      <div class="toggles">${H.toggle("sym", "Simetría", "Lo que haces en un lado se repite en el otro", sc.sym, "t-sym")}</div>
+      <div class="row">${hu.sculpt ? `<button class="btn danger" data-act="t-unsculpt">Borrar lo esculpido</button>` : `<span class="sub">Aún no hay nada esculpido.</span>`}</div>`;
   } else if (sec === "extremidades") {
     for (const [kind, sides] of [["brazo", ["L", "R"]], ["pierna", ["L", "R"]]]) for (const S of sides) {
       const key = `${kind}_${S}`, cur = hu.limbs?.[key] || "completo", pr = hu.prosthesis?.[key] || "ninguna";
       h += `<h3>${kind === "brazo" ? "Brazo" : "Pierna"} ${S === "L" ? "izquierdo" : "derecho"}${kind === "pierna" ? "a" : ""}`.replace("Piernaa", "Pierna").replace("izquierdoa", "izquierda").replace("derechoa", "derecha") + `</h3>
         <div class="pills">${Object.entries(LIMB_LEVELS[kind]).map(([k, l]) => pill(k, cur, l, "t-limb", `data-key="${key}"`)).join("")}</div>`;
       if (cur !== "completo" && cur !== "completa") h += `<div class="pills"><span class="pl">Prótesis</span>${Object.entries(PROSTHESES[kind]).map(([k, l]) => pill(k, pr, l, "t-prot", `data-key="${key}"`)).join("")}</div>`;
+      if (kind === "brazo" && cur !== "completo") h += `<div class="pills"><span class="pl">Manga</span>${[["vacia", "Vacía"], ["doblada", "Doblada y prendida"], ["recortada", "Recortada"]].map(([k, l]) => pill(k, hu.sleeves?.[key] || (pr !== "ninguna" ? "recortada" : "vacia"), l, "t-sleeve", `data-key="${key}"`)).join("")}</div>`;
     }
     h += `<h3>Ojos</h3>${["L", "R"].map(S => `<div class="pills"><span class="pl">${S === "L" ? "Izquierdo" : "Derecho"}</span>${[["normal", "Normal"], ["cerrado", "Cerrado"], ["parche", "Parche"], ["vidrio", "De vidrio"]].map(([k, l]) => pill(k, hu.eyes?.[S] || "normal", l, "t-eye", `data-key="${S}"`)).join("")}</div>`).join("")}
       <h3>Apoyo</h3><div class="pills">${[["ninguno", "Ninguno"], ["baston", "Bastón"], ["baston_plata", "Bastón con puño de plata"], ["muleta", "Muleta"]].map(([k, l]) => pill(k, hu.support || "ninguno", l, "t-support")).join("")}</div>
@@ -158,6 +176,9 @@ export function click(o, act, val, el, ui, deps) {
     case "t-eye": hu.eyes ??= {}; hu.eyes[el.dataset.key] = val; return { rebuild: true, render: true };
     case "t-support": hu.support = val; return { rebuild: true, render: true };
     case "t-support-side": hu.supportSide = val; return { rebuild: true, render: true };
+    case "t-tool": ui.sculpt.tool = val; return { render: true };
+    case "t-unsculpt": delete hu.sculpt; return { rebuild: true, render: true };
+    case "t-sleeve": hu.sleeves ??= {}; hu.sleeves[el.dataset.key] = val; return { rebuild: true, render: true };
     case "t-hand": o.hands ??= {}; o.hands[el.dataset.key] = val; Object.assign(o.pose.rot, deps.handPoseRot(val, el.dataset.key)); return { rebuild: true, render: true };
     case "t-tone": o.color = val; return { rebuild: true, render: true };
     case "t-mark": { hu.marks ??= []; const i = hu.marks.indexOf(val); if (i >= 0) hu.marks.splice(i, 1); else hu.marks.push(val); return { rebuild: true, render: true }; }
@@ -183,6 +204,7 @@ export function input(o, act, key, value) {
   if (act === "t-m") { hu[key] = value; return true; }
   if (act === "t-race") { const r = [...(hu.race || DEFAULT_HUMAN.race)]; r[+key.slice(4)] = value; hu.race = r; return true; }
   if (act === "t-hr") { o.hair ??= { style: "corto", color: "#2b2522" }; o.hair[key] = value; return true; }
+  if (act === "t-sc") { return false; }
   if (act === "t-gnum") { const [id, f] = key.split("|"), gm = o.clothes?.find(x => x.id === id); if (gm) gm[f] = value; return true; }
   return false;
 }

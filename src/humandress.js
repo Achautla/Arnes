@@ -29,6 +29,24 @@ function prep(ctl) {
     if (armW[v] > 0.05) armU[v] = along(p, B(`upperarm_${lo}`).head, B(`lowerarm_${lo}`).head, B(`hand_${lo}`).head);
     if (legW[v] > 0.05) legU[v] = along(p, B(`thigh_${lo}`).head, B(`calf_${lo}`).head, B(`foot_${lo}`).head);
   }
+  // ángulo alrededor del brazo, la pierna o el tronco (para pliegues que rodean el miembro)
+  const theta = new Float32Array(N), kind = new Int8Array(N);
+  const frameOf = (a, b) => { const ax = b.clone().sub(a).normalize(), ref = Math.abs(ax.z) < 0.9 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0); const b1 = ref.addScaledVector(ax, -ref.dot(ax)).normalize(), b2 = new THREE.Vector3().crossVectors(ax, b1); return { a, ax, b1, b2 }; };
+  const fr = {
+    armL: frameOf(B("upperarm_l").head, B("hand_l").head), armR: frameOf(B("upperarm_r").head, B("hand_r").head),
+    legL: frameOf(B("thigh_l").head, B("foot_l").head), legR: frameOf(B("thigh_r").head, B("foot_r").head),
+  };
+  const pz = B("pelvis").head.z;
+  for (let v = 0; v < N; v++) {
+    p.set(P[v * 3], P[v * 3 + 1], P[v * 3 + 2]);
+    let f = null, k = 0;
+    if (armW[v] >= 0.5) { f = side[v] > 0 ? fr.armL : fr.armR; k = side[v] > 0 ? 1 : 2; }
+    else if (legW[v] >= 0.5) { f = side[v] > 0 ? fr.legL : fr.legR; k = side[v] > 0 ? 3 : 4; }
+    kind[v] = k;
+    if (f) { const r = p.clone().sub(f.a); theta[v] = Math.atan2(r.dot(f.b2), r.dot(f.b1)); }
+    else theta[v] = Math.atan2(p.x, p.z - pz);
+  }
+  const armLen = B("upperarm_l").head.distanceTo(B("hand_l").head), legLen = B("thigh_l").head.distanceTo(B("foot_l").head);
   const eyes = [...new Set([...H.eyeL, ...H.eyeR])], ec = new THREE.Vector3();
   for (const v of eyes) ec.add(new THREE.Vector3(P[v * 3], P[v * 3 + 1], P[v * 3 + 2]));
   ec.multiplyScalar(1 / eyes.length);
@@ -40,7 +58,7 @@ function prep(ctl) {
     pelvisY: B("pelvis").head.y, neckY: B("neck_01").head.y, headY: B("head").head.y, chestY: B("spine_03").head.y,
     kneeY: B("calf_l").head.y, ankleY: B("foot_l").head.y, eyeY: ec.y, eyeZ: ec.z, top, hc,
   };
-  return ctl._prep = { H, N, P, nrm, armW, legW, headW, hW, armU, legU, side, L };
+  return ctl._prep = { H, N, P, nrm, armW, legW, headW, hW, armU, legU, side, L, theta, kind, armLen, legLen };
 }
 function fingerNames(s) { const o = []; for (const f of ["thumb", "index", "middle", "ring", "pinky"]) for (let i = 1; i <= 3; i++) o.push(`${f}_0${i}_${s}`); return o; }
 
@@ -169,7 +187,6 @@ function hairParts(ctl, D, hair) {
   const backZ = (() => { let z = 1; for (let v = 0; v < 13380; v++) if (hW[v] > 0.9 && Math.abs(P[v * 3 + 1] - c.y) < 0.02) z = Math.min(z, P[v * 3 + 2]); return z; })();
   const rigid = (geo, at) => out.push({ geo, rigid: headB, at });
   if (st === "chongo") rigid(new THREE.SphereGeometry(0.045 + 0.02 * vol, 20, 14), new THREE.Vector3(c.x, L.top - 0.035, backZ + 0.01));
-  if (st === "mechon") { const s = new THREE.SphereGeometry(0.04, 16, 10); s.scale(1.4, 0.5, 0.9); s.rotateZ(0.5); rigid(s, new THREE.Vector3(c.x + 0.025, L.top - 0.02, L.eyeZ - 0.005)); }
   if (st === "cola" || st === "trenza") {
     const Ltail = 0.12 + 0.35 * len, start = new THREE.Vector3(c.x, c.y + 0.02, backZ - 0.01);
     if (st === "cola") {
@@ -206,7 +223,52 @@ function hairParts(ctl, D, hair) {
     g2.setIndex(idx); g2.computeVertexNormals();
     out.push({ geo: g2, double: true });
   }
+  // mechones: cintas finas que salen del cuero cabelludo siguiendo el remolino de la coronilla
+  if (st !== "rapado" && st !== "calvo") {
+    const crown = new THREE.Vector3(c.x, L.top - 0.01, c.z - 0.035), roots = [];
+    const rnd = rng(7 + Math.round(vol * 100));
+    const scalp = []; for (let v = 0; v < 13380; v++) if (pred(v)) scalp.push(v);
+    const count = { corto: 700, mechon: 800, rizado: 900, afro: 1300, chongo: 600, cola: 600, trenza: 600, largo: 900, melena: 900 }[st] || 600;
+    const len0 = { corto: 0.022, mechon: 0.045, rizado: 0.03, afro: 0.045, chongo: 0.04, cola: 0.04, trenza: 0.04, largo: 0.06, melena: 0.05 }[st] || 0.04;
+    for (let i = 0; i < count && scalp.length; i++) {
+      const v = scalp[(rnd() * scalp.length) | 0];
+      const pnt = new THREE.Vector3(P[v * 3], P[v * 3 + 1], P[v * 3 + 2]), n = new THREE.Vector3(nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]);
+      const out0 = pnt.clone().sub(crown); out0.addScaledVector(n, -out0.dot(n));
+      const dir = out0.lengthSq() < 1e-6 ? new THREE.Vector3(0, 0, 1) : out0.normalize();
+      dir.y -= 0.35; dir.addScaledVector(n, -dir.dot(n)).normalize();
+      const fr = Math.cos(Math.atan2(pnt.x - c.x, pnt.z - c.z));
+      if (st === "mechon" && fr > 0.6) dir.lerp(new THREE.Vector3(0.6, -0.3, 0.6), 0.4).normalize();
+      // pelo corto: al frente va peinado hacia atrás y arriba, no cae sobre la frente
+      if ((st === "corto" || st === "rizado" || st === "afro") && fr > 0.2) { dir.lerp(new THREE.Vector3(0, 0.35, -0.9), 0.75); dir.addScaledVector(n, -dir.dot(n)).normalize(); }
+      roots.push({ p: pnt.addScaledVector(n, thick * 0.6), n, dir, len: len0 * (0.6 + rnd() * 0.8) * (0.7 + 0.6 * vol) });
+    }
+    const geo = strands(roots, { width: st === "afro" ? 0.007 : 0.0045, curl: st === "rizado" || st === "afro" ? 0.6 : 0.08, lift: st === "afro" ? 0.5 : 0.1, gravity: ["largo", "melena", "mechon"].includes(st) ? 0.3 : 0.05, seed: 11 });
+    out.push({ geo, rigid: headB, abs: true, double: true });
+  }
   return out;
+}
+const rng = seed => { let s = seed >>> 0 || 1; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); };
+// Cintas de pelo o pelaje: cada raíz da una cinta afilada de pocos segmentos que sigue su dirección,
+// se despega de la superficie (lift), se riza (curl) y cae un poco por su peso. Sirve para cabello, barba y criaturas.
+export function strands(roots, { width = 0.004, segs = 5, curl = 0.1, lift = 0.15, gravity = 0.25, seed = 1 } = {}) {
+  const rnd = rng(seed), pos = [], idx = [];
+  for (const r of roots) {
+    const side = new THREE.Vector3().crossVectors(r.n, r.dir).normalize(), ph = rnd() * 6.28, base = pos.length / 3;
+    let p = r.p.clone(), d = r.dir.clone().addScaledVector(r.n, lift).normalize();
+    for (let k = 0; k <= segs; k++) {
+      const t = k / segs, w = width * (1 - t * 0.85) * (0.7 + rnd() * 0.6);
+      const c = side.clone().multiplyScalar(Math.sin(ph + t * 9) * curl * r.len * 0.25).addScaledVector(r.n, Math.cos(ph + t * 9) * curl * r.len * 0.15);
+      const q = p.clone().add(c);
+      pos.push(q.x - side.x * w / 2, q.y - side.y * w / 2, q.z - side.z * w / 2, q.x + side.x * w / 2, q.y + side.y * w / 2, q.z + side.z * w / 2);
+      p.addScaledVector(d, r.len / segs);
+      d.y -= gravity / segs; d.normalize();
+      if (k < segs) { const i = base + k * 2; idx.push(i, i + 1, i + 2, i + 1, i + 3, i + 2); }
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx); g.computeVertexNormals();
+  return g;
 }
 
 // ------------------------------------------------------------------ vestir
@@ -216,40 +278,78 @@ export function dressHuman(fig, clothes, opts = {}) {
   const group = new THREE.Group(); group.name = "ropa"; group.userData.clothRoot = true;
   const items = [];
   let useColor = !!opts.useColor;
-  const skinned = (geo, g, kind = "ropa", double = false) => {
+  const skinned = (geo, g, kind = "ropa", double = false, folds = false) => {
     const m = new THREE.SkinnedMesh(geo, material(g.color, g.tex, useColor, double ? THREE.DoubleSide : THREE.FrontSide));
     m.bind(ctl.mesh.skeleton, ctl.mesh.bindMatrix); m.castShadow = m.receiveShadow = true; m.frustumCulled = false;
     m.userData.cloth = true; m.userData.garment = g.id; m.userData.human = true;
     m.userData.jointAt = ctl.mesh.userData.jointAt;
-    group.add(m); items.push({ m, g, double });
+    group.add(m);
+    const it = { m, g, double };
+    if (folds) { it.base = Float32Array.from(geo.getAttribute("position").array); it.n = Float32Array.from(geo.getAttribute("normal").array); it.used = usedVerts(geo); }
+    items.push(it);
   };
   const ease = g => 0.6 + (g.ease ?? 0.9) * 0.45;
   const torso = v => armW[v] < 0.5 && legW[v] < 0.5 && headW[v] < 0.35;
   const nk = ctl.J[D.H.boneIndex.neck_01], nDir = nk.tail.clone().sub(nk.head).normalize();
   const neckT = v => (P[v * 3] - nk.head.x) * nDir.x + (P[v * 3 + 1] - nk.head.y) * nDir.y + (P[v * 3 + 2] - nk.head.z) * nDir.z;
-  const top = (g, hemY, off, neckDrop = -0.025, upTo = 1, smooth = 6) => {
-    const s = g.sleeve ?? 1;
+  // cuellos: se miden a lo largo del cuello, así el corte queda parejo
+  const front = v => P[v * 3 + 2] > nk.head.z - 0.005;
+  const collarOk = (v, style) => {
+    const t = neckT(v), x = Math.abs(P[v * 3] - nk.head.x);
+    switch (style) {
+      case "alto": return t < 0.075;
+      case "camisa": return t < 0.04;
+      case "v": return t < 0.028 - (front(v) ? Math.max(0, 0.15 - x * 2.4) : 0);
+      case "abierto": return t < 0.02 - (front(v) ? Math.max(0, 0.08 - x * 1.4) : 0);
+      case "barco": return t < -0.01;
+      default: return t < 0.024; // redondo
+    }
+  };
+  const neckOk = v => D.hW[v] < 0.2;
+  const COLLAR = { camisa: "camisa", saco: "v", gabardina: "alto", vestido: "redondo", rebozo: "abierto" };
+  const stumps = (ctl.cut?.stumps || []).filter(st => st.kind === "brazo");
+  const CUT_U = { mano: 0.99, antebrazo: 0.75, codo: 0.52, brazo: 0.26, hombro: 0.08 };
+  const top = (g, hemY, off, upTo = 1, smooth = 6) => {
+    const s = g.sleeve ?? 1, style = g.collar || COLLAR[g.type] || "redondo";
     const pred = v => {
       const y = P[v * 3 + 1];
       if (armW[v] >= 0.5) return armU[v] <= Math.max(0.07, Math.min(upTo, s) * 0.98);
       if (legW[v] >= 0.5) return y > hemY && legU[v] < 0.25; // la cadera también se cubre
-      return torso(v) && y > hemY && neckT(v) < -neckDrop + (g.collar === "alzado" ? 0.04 : 0);
+      return (torso(v) || neckOk(v)) && y > hemY && collarOk(v, style);
     };
     const geo = shell(ctl, D, pred, v => off * ease(g) * (armW[v] > 0.5 ? 0.8 : 1), smooth);
-    if (geo) skinned(geo, g);
+    if (geo) skinned(geo, g, "ropa", false, true);
+    // cuello de camisa: una banda un poco más separada
+    if (style === "camisa" || style === "alto") {
+      const band = shell(ctl, D, v => (torso(v) || neckOk(v)) && !(armW[v] >= 0.5) && neckT(v) > (style === "alto" ? 0.02 : -0.005) && collarOk(v, style), () => off * ease(g) * 1.9 + 0.004, 2);
+      if (band) skinned(band, g);
+    }
+    // manga de un brazo que falta: vacía (cuelga), doblada y prendida, o recortada
+    for (const st of stumps) {
+      const mode = opts.sleeves?.[st.key] || (opts.prosthesis?.[st.key] && opts.prosthesis[st.key] !== "ninguna" ? "recortada" : "vacia"), cutU = CUT_U[st.level] ?? 0.5, end = Math.min(upTo, s) * 0.98;
+      if (mode === "recortada" || end <= cutU + 0.02) continue;
+      const sgn = st.side === "L" ? 1 : -1;
+      const geo2 = emptySleeve(ctl, D, sgn, cutU, mode === "doblada" ? Math.min(end, cutU + 0.16) : end, off * ease(g) + 0.006, mode, st.bone);
+      if (geo2) skinned(geo2, g, "ropa", true);
+      if (mode === "doblada") {
+        const pin = new THREE.Mesh(new THREE.SphereGeometry(0.006, 10, 8), new THREE.MeshStandardMaterial({ color: 0x9a9da3, metalness: 0.7, roughness: 0.3 }));
+        const bone = ctl.bones[st.bone]; pin.position.copy(st.tip).addScaledVector(st.axis, -st.R * 2.2).add(new THREE.Vector3(sgn * st.R * 0.9, 0, 0)).sub(ctl.J[st.bone].head);
+        pin.userData.human = true; bone.add(pin); items.push({ m: pin, g: { color: "#9a9da3" }, rigid: true, keepMat: true });
+      }
+    }
   };
   for (const g of clothes) {
     if (g.type === "piel") continue;
     if (g.type === "camisa") top(g, L.pelvisY - 0.07, 0.0045);
-    else if (g.type === "saco") top(g, L.pelvisY - 0.17, 0.012, -0.005);
-    else if (g.type === "rebozo") top({ ...g, sleeve: 0.4 }, L.chestY - 0.16, 0.016, 0.0, 0.4, 10);
-    else if (g.type === "gabardina") { top(g, L.pelvisY - 0.05, 0.019, -0.01); const yb = L.pelvisY - (L.pelvisY - L.ankleY) * (g.length ?? 0.72) * 1.1; skinned(tube(ctl, D, L.pelvisY + 0.02, yb, 0.03 * ease(g), 0.5), g, "ropa", true); }
+    else if (g.type === "saco") top(g, L.pelvisY - 0.17, 0.012);
+    else if (g.type === "rebozo") top({ ...g, sleeve: 0.4 }, L.chestY - 0.16, 0.016, 0.4, 10);
+    else if (g.type === "gabardina") { top(g, L.pelvisY - 0.05, 0.019); const yb = L.pelvisY - (L.pelvisY - L.ankleY) * (g.length ?? 0.72) * 1.1; skinned(tube(ctl, D, L.pelvisY + 0.02, yb, 0.03 * ease(g), 0.5), g, "ropa", true); }
     else if (g.type === "vestido") { top(g, L.pelvisY + 0.02, 0.004); const yb = L.pelvisY - (L.pelvisY - L.ankleY) * (g.length ?? 0.55) * 1.15; skinned(tube(ctl, D, L.pelvisY + 0.06, yb, 0.012 * ease(g), 0.7), g, "ropa", true); }
     else if (g.type === "falda") { const yb = L.pelvisY - (L.pelvisY - L.ankleY) * (g.length ?? 0.5) * 1.15; skinned(tube(ctl, D, L.pelvisY + 0.06, yb, 0.012 * ease(g), 0.6), g, "ropa", true); }
     else if (g.type === "pantalon") {
       const len = g.length ?? 1;
       const pred = v => legW[v] >= 0.5 ? legU[v] <= 0.15 + 0.85 * len : (torso(v) && P[v * 3 + 1] < L.pelvisY + 0.06);
-      const geo = shell(ctl, D, pred, v => 0.0065 * ease(g), 4); if (geo) skinned(geo, g);
+      const geo = shell(ctl, D, pred, v => 0.0065 * ease(g), 4); if (geo) skinned(geo, g, "ropa", false, true);
     } else if (g.type === "capa") skinned(cape(ctl, D, g.length ?? 0.8, 0.02), g, "ropa", true);
   }
   // calzado
@@ -276,6 +376,10 @@ export function dressHuman(fig, clothes, opts = {}) {
       const full = fac.barba === "completa", cand = fac.barba === "candado";
       const pred = v => face(v) && D.H.lips[v] < 90 && (cand ? Math.abs(P[v * 3] - eyeX) < 0.032 && P[v * 3 + 1] < mouthY - 0.005 : P[v * 3 + 1] < mouthY + 0.004 || (Math.abs(P[v * 3] - eyeX) > 0.048 && P[v * 3 + 1] < F.eyeY - 0.04));
       const geo = shell(ctl, D, pred, v => (full ? 0.012 : 0.004) * (1 + (P[v * 3 + 1] < mouthY - 0.03 ? 0.6 : 0))); if (geo) skinned(geo, g);
+      // pelo de barba: cintas cortas hacia abajo
+      const rnd = rng(5), roots = [], pool = []; for (let v = 0; v < 13380; v++) if (pred(v)) pool.push(v);
+      for (let i = 0; i < (full ? 500 : 250) && pool.length; i++) { const v = pool[(rnd() * pool.length) | 0], n = new THREE.Vector3(D.nrm[v * 3], D.nrm[v * 3 + 1], D.nrm[v * 3 + 2]); roots.push({ p: new THREE.Vector3(P[v * 3], P[v * 3 + 1], P[v * 3 + 2]).addScaledVector(n, full ? 0.01 : 0.003), n, dir: new THREE.Vector3(0, -1, 0.15).addScaledVector(n, -n.y).normalize(), len: full ? 0.025 : 0.01 }); }
+      if (roots.length) { const m = new THREE.Mesh(strands(roots, { width: 0.003, curl: 0.3, lift: 0.2, seed: 3 }), material(hairColor, null, useColor, THREE.DoubleSide)); m.userData.human = true; m.position.copy(ctl.J[D.H.boneIndex.head].head).negate(); ctl.bones[D.H.boneIndex.head].add(m); items.push({ m, g, rigid: true, double: true }); }
     }
     if (fac.bigote && fac.bigote !== "ninguno") {
       const w = fac.bigote === "grueso" ? 0.034 : 0.026;
@@ -288,20 +392,27 @@ export function dressHuman(fig, clothes, opts = {}) {
     const hg = { id: "cabello", type: "cabello", color: hairColor, tex: null };
     for (const part of hairParts(ctl, D, opts.hair)) {
       if (part.rigid !== undefined) {
-        const m = new THREE.Mesh(part.geo, material(hg.color, null, useColor)); m.castShadow = m.receiveShadow = true; m.userData.cloth = true; m.userData.human = true;
+        const m = new THREE.Mesh(part.geo, material(hg.color, null, useColor, part.double ? THREE.DoubleSide : THREE.FrontSide)); m.castShadow = m.receiveShadow = true; m.userData.cloth = true; m.userData.human = true;
         const bone = ctl.bones[part.rigid];
         m.position.copy(part.abs ? new THREE.Vector3() : part.at).sub(ctl.J[part.rigid].head);
-        bone.add(m); items.push({ m, g: hg, rigid: true });
+        bone.add(m); items.push({ m, g: hg, rigid: true, double: part.double });
       } else skinned(part.geo, hg, "pelo", part.double);
     }
   }
   fig.root.add(group);
   const setStyle = ({ color } = {}) => {
     if (color !== undefined) useColor = color;
-    for (const it of items) { it.m.material = material(it.g.color, it.g.tex, useColor, it.double ? THREE.DoubleSide : THREE.FrontSide); }
+    for (const it of items) { if (!it.keepMat) it.m.material = material(it.g.color, it.g.tex, useColor, it.double ? THREE.DoubleSide : THREE.FrontSide); }
   };
+  // pliegues: anillos en codos, rodillas y cintura según cuánto se doblan; caídas verticales cerca de los dobladillos
+  let sig = "", pendingAt = 0;
+  const poseSig = () => ["elbow_L", "elbow_R", "knee_L", "knee_R", "hip_L", "hip_R", "spine2", "shoulder_L", "shoulder_R"].map(j => fig.joints[j]?.quaternion.toArray().map(x => x.toFixed(3)).join(",")).join("|");
+  const refold = () => { const fl = flexOf(fig); for (const it of items) if (it.base) applyFolds(it, D, fl); };
+  refold(); sig = poseSig();
   return {
-    group, update() {}, tick: () => false, setStyle, setWind() {}, labels: () => [], touch() {},
+    group, setStyle, setWind() {}, labels: () => [], touch() {},
+    update() { refold(); sig = poseSig(); },
+    tick(now) { const s2 = poseSig(); if (s2 === sig) { if (pendingAt && now - pendingAt > 140) { pendingAt = 0; refold(); return true; } return false; } sig = s2; pendingAt = now; return false; },
     dispose() { for (const it of items) { it.m.removeFromParent(); it.m.geometry.dispose?.(); } group.removeFromParent(); },
   };
 }
@@ -344,4 +455,84 @@ export function equipHuman(fig, list, opts, equipFn) {
     }
   } finally { fig.d = d0; }
   return { dispose() { for (const h of handles) h.dispose(); }, setStyle(u) { for (const h of handles) h.setStyle(u); } };
+}
+
+// ------------------------------------------------------------------ pliegues y mangas vacías
+function usedVerts(geo) { const idx = geo.index.array, u = new Uint8Array(geo.getAttribute("position").count); for (let i = 0; i < idx.length; i++) u[idx[i]] = 1; const out = []; for (let i = 0; i < u.length; i++) if (u[i]) out.push(i); return Uint32Array.from(out); }
+const ang = (a, b, c) => { const u = b.clone().sub(a).normalize(), w = c.clone().sub(b).normalize(); return Math.acos(THREE.MathUtils.clamp(u.dot(w), -1, 1)); };
+function flexOf(fig) {
+  const J = n => new THREE.Vector3().setFromMatrixPosition(fig.joints[n].matrixWorld);
+  fig.root.updateMatrixWorld(true);
+  const f = {};
+  for (const S of ["L", "R"]) {
+    f["elbow" + S] = Math.min(1, ang(J(`shoulder_${S}`), J(`elbow_${S}`), J(`wrist_${S}`)) / 2.2);
+    f["knee" + S] = Math.min(1, ang(J(`hip_${S}`), J(`knee_${S}`), J(`ankle_${S}`)) / 2.2);
+    // cadera doblada: el muslo se acerca al tronco (sentado, en cuclillas)
+    const up = J("spine3").sub(J("hips")).normalize(), th = J(`knee_${S}`).sub(J(`hip_${S}`)).normalize();
+    f["hip" + S] = THREE.MathUtils.clamp((Math.acos(THREE.MathUtils.clamp(up.dot(th), -1, 1)) * -1 + Math.PI) / (Math.PI / 2), 0, 1.4) * 0.8;
+    const down = new THREE.Vector3(0, -1, 0).applyQuaternion(fig.root.getWorldQuaternion(new THREE.Quaternion())), arm = J(`elbow_${S}`).sub(J(`shoulder_${S}`)).normalize();
+    f["raise" + S] = THREE.MathUtils.clamp(Math.acos(THREE.MathUtils.clamp(arm.dot(down), -1, 1)) / 2.2, 0, 1);
+  }
+  f.spine = Math.min(1, ang(J("hips"), J("spine2"), J("neck1")) / 1.0);
+  return f;
+}
+function applyFolds(it, D, fl) {
+  const pos = it.m.geometry.getAttribute("position"), A = pos.array, B = it.base, Nn = it.n, e = 0.6 + (it.g.ease ?? 0.9) * 0.45;
+  const { armU, legU, theta, kind, P, L, armLen, legLen } = D, TAU = Math.PI * 2;
+  for (const v of it.used) {
+    const k = kind[v], th = theta[v];
+    let d = 0;
+    if (k === 1 || k === 2) {
+      const fx = k === 1 ? fl.elbowL : fl.elbowR, dist = (armU[v] - 0.5) * armLen;
+      const g = Math.exp(-((dist / 0.075) ** 2));
+      d += (0.0012 + 0.0065 * fx) * e * g * Math.sin(dist / 0.019 * TAU + 1.7 * Math.sin(th * 2)) * (0.65 + 0.35 * Math.cos(th));
+      const rz = k === 1 ? fl.raiseL : fl.raiseR, sh = armU[v] * armLen;
+      if (sh < 0.12) d += 0.0035 * rz * e * Math.exp(-((sh / 0.06) ** 2)) * Math.sin(th * 4);
+      d += 0.0012 * e * Math.sin(th * 5 + armU[v] * 9) * Math.max(0, armU[v] - 0.7) * 3;
+    } else if (k === 3 || k === 4) {
+      const fx = k === 3 ? fl.kneeL : fl.kneeR, hp = k === 3 ? fl.hipL : fl.hipR, dist = (legU[v] - 0.5) * legLen;
+      const g = Math.exp(-((dist / 0.09) ** 2));
+      d += (0.0015 + 0.0075 * fx) * e * g * Math.sin(dist / 0.024 * TAU + 1.5 * Math.sin(th * 2)) * (0.6 + 0.4 * Math.cos(th + Math.PI));
+      const lap = legU[v] * legLen;
+      if (lap < 0.2) d += 0.006 * hp * e * Math.exp(-((lap / 0.09) ** 2)) * Math.sin(th * 3 + lap * 60) * Math.max(0, Math.cos(th));
+      d += 0.0018 * e * Math.sin(th * 4 + legU[v] * 7) * Math.max(0, legU[v] - 0.75) * 4;
+    } else {
+      const y = P[v * 3 + 1], w = (y - (L.pelvisY + 0.12)) / 0.075;
+      d += 0.0045 * fl.spine * e * Math.exp(-w * w) * Math.sin(y / 0.022 * TAU + Math.sin(th * 3)) * Math.max(0, Math.cos(th));
+      if (y < L.chestY) d += 0.0016 * e * Math.sin(th * 7 + y * 28) * Math.min(1, (L.chestY - y) / 0.2);
+    }
+    const i = v * 3;
+    A[i] = B[i] + Nn[i] * d; A[i + 1] = B[i + 1] + Nn[i + 1] * d; A[i + 2] = B[i + 2] + Nn[i + 2] * d;
+  }
+  pos.needsUpdate = true; it.m.geometry.computeVertexNormals();
+}
+// Manga sin brazo dentro: se arma con la forma del brazo completo, aplanada, y cuelga del muñón
+function emptySleeve(ctl, D, sgn, u0, u1, off, mode, owner) {
+  const { H, armW, armU, side } = D, P0 = ctl.shape0 || ctl.shape;
+  const sel = new Uint8Array(H.N);
+  for (let v = 0; v < 13380; v++) if (armW[v] >= 0.5 && side[v] === sgn && armU[v] >= u0 - 0.03 && armU[v] <= u1) sel[v] = 1;
+  const idx = [];
+  for (let f = 0; f < H.body.length; f += 3) { const a = H.body[f], b = H.body[f + 1], c = H.body[f + 2]; if (sel[a] && sel[b] && sel[c]) idx.push(a, b, c); }
+  if (!idx.length) return null;
+  const s = sgn > 0 ? "l" : "r", B = n => ctl.J[H.boneIndex[`${n}_${s}`]];
+  const a = B("upperarm").head, ax = B("hand").head.clone().sub(a).normalize(), flatDir = new THREE.Vector3(0, 0, 1).addScaledVector(ax, -ax.z).normalize();
+  const pos = new Float32Array(H.N * 3), p = new THREE.Vector3();
+  const cutLen = u0 * a.distanceTo(B("hand").head) * 1.0;
+  for (let v = 0; v < H.N; v++) {
+    if (!sel[v]) continue;
+    p.set(P0[v * 3], P0[v * 3 + 1], P0[v * 3 + 2]);
+    const t = p.clone().sub(a).dot(ax), c = a.clone().addScaledVector(ax, t), r = p.clone().sub(c);
+    const along = r.dot(flatDir); r.addScaledVector(flatDir, -along * 0.8); r.multiplyScalar(0.78); r.addScaledVector(r.clone().normalize(), off);
+    let tt = t;
+    if (mode === "doblada" && t > cutLen) { tt = cutLen - (t - cutLen) * 0.9; r.multiplyScalar(1.12); }
+    const q = a.clone().addScaledVector(ax, tt).add(r);
+    pos[v * 3] = q.x; pos[v * 3 + 1] = q.y; pos[v * 3 + 2] = q.z;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  const si = new Uint16Array(H.N * 4), sw = new Float32Array(H.N * 4);
+  for (let v = 0; v < H.N; v++) { si[v * 4] = owner; sw[v * 4] = 1; }
+  g.setAttribute("skinIndex", new THREE.Uint16BufferAttribute(si, 4)); g.setAttribute("skinWeight", new THREE.BufferAttribute(sw, 4));
+  g.setIndex(idx); g.computeVertexNormals();
+  return g;
 }

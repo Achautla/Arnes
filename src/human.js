@@ -18,7 +18,7 @@ export function loadHuman() {
     H = {
       N: meta.N, buf, bones: meta.bones, sliders: meta.sliders,
       pos: part("pos", Float32Array), body: part("body", Uint16Array), eyeL: part("eyeL", Uint16Array), eyeR: part("eyeR", Uint16Array),
-      si: part("si", Uint8Array), sw: part("sw", Uint8Array), brow: part("brow", Uint8Array), lips: part("lips", Uint8Array),
+      si: part("si", Uint8Array), sw: part("sw", Uint8Array), mirror: meta.parts.mirror ? part("mirror", Uint16Array) : null, brow: part("brow", Uint8Array), lips: part("lips", Uint8Array),
       morphs: new Map(meta.morphs.map(m => [m.n, m])), cache: new Map(),
     };
     H.boneIndex = Object.fromEntries(H.bones.map((b, i) => [b.name, i]));
@@ -84,6 +84,8 @@ export function shapeOf(h) {
       out[v * 3] = c.x + (out[v * 3] - c.x) * k; out[v * 3 + 1] = c.y + (out[v * 3 + 1] - c.y) * k; out[v * 3 + 2] = c.z + (out[v * 3 + 2] - c.z) * k;
     }
   }
+  // lo esculpido con el dedo (diferencias guardadas en la ficha)
+  if (h.sculpt?.i) { const { idx, d } = decodeSculpt(h.sculpt); for (let k = 0; k < idx.length; k++) { const v = idx[k] * 3; out[v] += d[k * 3] / 1e4; out[v + 1] += d[k * 3 + 1] / 1e4; out[v + 2] += d[k * 3 + 2] / 1e4; } }
   // pies en el piso después de la forma
   let minY = Infinity; for (let i = 0; i < 13380; i++) minY = Math.min(minY, out[i * 3 + 1]);
   for (let i = 1; i < out.length; i += 3) out[i] -= minY;
@@ -124,6 +126,10 @@ export function humanDims(h) {
     hand: B("hand_l").head.distanceTo(B("middle_03_l").tail),
   };
   d.hh = top - d.headY;
+  // del centro de la cadera al apoyo de los glúteos (para sentarlo a la misma altura con otro cuerpo)
+  let seat = Infinity; const pb = H.boneIndex.pelvis;
+  for (let i = 0; i < 13380; i++) if (H.dom[i] === pb) seat = Math.min(seat, P[i * 3 + 1]);
+  d.seat = isFinite(seat) ? d.hipsY - seat : 0.09 * top;
   return d;
 }
 
@@ -232,6 +238,8 @@ export function attachHuman(fig, h, face) {
   const skin = skinMaterial();
   const mesh = new THREE.SkinnedMesh(geo, [skin, eyeMat]);
   mesh.name = "cuerpo-realista"; mesh.castShadow = mesh.receiveShadow = true; mesh.frustumCulled = false;
+  // la esfera de prueba del rayo cubre cualquier pose (si no, tocar un brazo levantado fallaría)
+  mesh.computeBoundingSphere = function () { this.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 1, 0), 3); };
   mesh.userData.human = true;
   // Esqueleto en reposo de MakeHuman: huesos sin giro, colocados en sus cabezas
   const bones = H.bones.map((b, i) => { const o = new THREE.Bone(); o.name = b.name; return o; });
@@ -300,8 +308,9 @@ export function attachHuman(fig, h, face) {
   const eyeFix = [];
   for (const [S, side] of [["L", "left"], ["R", "right"]]) if (h.eyes?.[S] === "cerrado" || h.eyes?.[S] === "parche") eyeFix.push([`e/eye-${side}-closure`, h.eyes?.[S] === "parche" ? 0.6 : 1]);
   const ctl = {
-    mesh, spec: h, skin, shape, J, bones, SI, SW, geo, cut,
+    mesh, spec: h, skin, shape, shape0: shapeOf(h), J, bones, SI, SW, geo, cut,
     setExpression(e) {
+      ctl.lastExpr = e;
       const P = pos.array; P.set(shape);
       const terms = exprTerms(e).filter(([n]) => !eyeFix.some(([m]) => m.replace("closure", "") === n.replace(/closure|opened-up|slit/, "")));
       for (const [n, w] of [...terms, ...eyeFix]) addMorph(P, n, w);
@@ -571,4 +580,63 @@ function glassEye(col, P, eyes) {
       col[v * 3] = rgb[0]; col[v * 3 + 1] = rgb[1]; col[v * 3 + 2] = rgb[2];
     }
   }
+}
+
+// ------------------------------------------------------------------ escultura con el dedo
+const b64 = u8 => { let s = ""; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
+const unb64 = str => { const s = atob(str), u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return u; };
+export function decodeSculpt(sc) { return { idx: new Uint16Array(unb64(sc.i).buffer), d: new Int16Array(unb64(sc.d).buffer) }; }
+let adj = null;
+function adjacency() {
+  if (adj) return adj;
+  const sets = Array.from({ length: 13380 }, () => new Set());
+  for (let i = 0; i < H.body.length; i += 3) { const a = H.body[i], b = H.body[i + 1], c = H.body[i + 2]; sets[a].add(b).add(c); sets[b].add(a).add(c); sets[c].add(a).add(b); }
+  return adj = sets.map(x => Uint16Array.from(x));
+}
+export const SCULPT_TOOLS = { inflar: "Inflar", aplanar: "Desinflar", alisar: "Alisar", pellizcar: "Pellizcar", arrastrar: "Arrastrar" };
+// Suma el pincel a la forma de la ficha. hit: intersección del rayo con la malla; drag: desplazamiento en el mundo
+export function sculptAt(ctl, hit, { tool = "inflar", radius = 0.03, strength = 0.5, sym = true } = {}, drag = null) {
+  const P = ctl.shape, N0 = 13380, f = hit.face; if (!f) return;
+  // vértice más cercano al punto tocado (en el mundo, ya posado)
+  let best = f.a, bd = Infinity; const tmp = new THREE.Vector3();
+  for (const v of [f.a, f.b, f.c]) { ctl.mesh.getVertexPosition(v, tmp); tmp.applyMatrix4(ctl.mesh.matrixWorld); const d = tmp.distanceToSquared(hit.point); if (d < bd) { bd = d; best = v; } }
+  if (best >= N0) return;
+  ctl.sculptD ??= new Float32Array(N0 * 3);
+  if (!ctl._sculptLoaded && ctl.spec.sculpt?.i) { const { idx, d } = decodeSculpt(ctl.spec.sculpt); for (let k = 0; k < idx.length; k++) for (let j = 0; j < 3; j++) ctl.sculptD[idx[k] * 3 + j] = d[k * 3 + j] / 1e4; }
+  ctl._sculptLoaded = true;
+  const nrm = ctl.geo.getAttribute("normal").array;
+  // el arrastre del mundo se lleva al espacio de reposo con el hueso dominante
+  let dl = null;
+  if (drag && tool === "arrastrar") {
+    const b = H.dom[best], bone = ctl.bones[b], sk = ctl.mesh.skeleton;
+    const M = new THREE.Matrix4().multiplyMatrices(bone.matrixWorld, sk.boneInverses[b]).multiply(ctl.mesh.bindMatrix);
+    dl = drag.clone().applyMatrix3(new THREE.Matrix3().setFromMatrix4(M).invert());
+  }
+  const apply = (center, mirrorX) => {
+    const cx = P[center * 3], cy = P[center * 3 + 1], cz = P[center * 3 + 2], r2 = radius * radius;
+    const A = tool === "alisar" ? adjacency() : null, moves = [];
+    for (let v = 0; v < N0; v++) {
+      const dx = P[v * 3] - cx, dy = P[v * 3 + 1] - cy, dz = P[v * 3 + 2] - cz, d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 > r2) continue;
+      const w = (1 - d2 / r2) ** 2 * strength;
+      let mx = 0, my = 0, mz = 0;
+      if (tool === "inflar" || tool === "aplanar") { const k = (tool === "inflar" ? 1 : -1) * w * radius * 0.08; mx = nrm[v * 3] * k; my = nrm[v * 3 + 1] * k; mz = nrm[v * 3 + 2] * k; }
+      else if (tool === "pellizcar") { mx = -dx * w * 0.08; my = -dy * w * 0.08; mz = -dz * w * 0.08; }
+      else if (tool === "alisar") { let ax = 0, ay = 0, az = 0; const l = A[v]; for (const u of l) { ax += P[u * 3]; ay += P[u * 3 + 1]; az += P[u * 3 + 2]; } const n = l.length || 1; mx = (ax / n - P[v * 3]) * w * 0.5; my = (ay / n - P[v * 3 + 1]) * w * 0.5; mz = (az / n - P[v * 3 + 2]) * w * 0.5; }
+      else if (tool === "arrastrar" && dl) { mx = dl.x * w; my = dl.y * w; mz = dl.z * w; }
+      if (mirrorX) mx = -mx;
+      moves.push(v, mx, my, mz);
+    }
+    for (let i = 0; i < moves.length; i += 4) { const v = moves[i]; for (let j = 0; j < 3; j++) { P[v * 3 + j] += moves[i + 1 + j]; ctl.sculptD[v * 3 + j] += moves[i + 1 + j]; } }
+  };
+  apply(best, false);
+  if (sym && H.mirror) { const m = H.mirror[best]; if (Math.abs(P[best * 3]) > 0.004) apply(m, true); }
+  ctl.setExpression(ctl.lastExpr);
+}
+export function encodeSculpt(ctl) {
+  const D = ctl.sculptD; if (!D) return ctl.spec.sculpt || null;
+  const idx = [], d = [];
+  for (let v = 0; v < 13380; v++) { const x = Math.round(D[v * 3] * 1e4), y = Math.round(D[v * 3 + 1] * 1e4), z = Math.round(D[v * 3 + 2] * 1e4); if (x || y || z) { idx.push(v); d.push(x, y, z); } }
+  if (!idx.length) return null;
+  return { i: b64(new Uint8Array(Uint16Array.from(idx).buffer)), d: b64(new Uint8Array(Int16Array.from(d.map(x => Math.max(-32767, Math.min(32767, x)))).buffer)) };
 }

@@ -282,6 +282,26 @@ export async function drawInStyle(line, tone, p, { seed = 7, mask = null, onProg
     }
     g.putImageData(img, 0, 0);
   }
+  // --- rasgos oscuros (ojos, cejas, cabello, barba): se rellenan con trazo corto que sigue su forma,
+  // como hace un dibujante, en vez de dejarlos al contorno
+  if (features) {
+    const fw = Math.round(W / 2), fh = Math.round(Hh / 2), F = toneOf(features, fw, fh), Fb = blurF(F, fw, fh, 1);
+    const fbg = pct(Array.from(F.filter((_, i) => i % 13 === 0)), 0.98);
+    const inten = Math.min(1, 0.45 + (p.fillFrac || 0) * 1.2 + (p.hatchFrac || 0) * 0.4);
+    const step = Math.max(1.5, width * 0.7 / 2);
+    for (let y = 1; y < fh - 1; y += step) for (let x = 1; x < fw - 1; x += step) {
+      const xi = x | 0, yi = y | 0, i = yi * fw + xi, t = F[i];
+      if (t > 0.24 || Math.abs(t - fbg) < 0.02) continue;
+      if (rand() > inten * (1.1 - t * 2.5)) continue;
+      const gx = Fb[i + 1] - Fb[i - 1], gy = Fb[i + fw] - Fb[i - fw];
+      const a = Math.atan2(gy, gx) + Math.PI / 2 + (rand() - 0.5) * 0.5, l = (3 + rand() * 6) * (1 + (0.24 - t) * 3);
+      const X = x * 2, Y = y * 2, ca = Math.cos(a), sa = Math.sin(a);
+      g.globalAlpha = 0.6 + rand() * 0.35;
+      strokePoly(g, [[X - ca * l, Y - sa * l], [X, Y], [X + ca * l, Y + sa * l]], width * (0.75 + (0.24 - t) * 2), rand, 0.3);
+      if (t < 0.09 && rand() < 0.5) { g.beginPath(); g.arc(X, Y, width * 1.2, 0, 6.283); g.fill(); }
+    }
+    g.globalAlpha = 1;
+  }
   // --- contorno: se vectoriza y se vuelve a trazar con la mano del artista
   const lc = line.getContext("2d").getImageData(0, 0, W, Hh).data, lm = new Uint8Array(W * Hh);
   for (let i = 0; i < W * Hh; i++) lm[i] = lc[i * 4 + 3] > 40 && lum(lc[i * 4], lc[i * 4 + 1], lc[i * 4 + 2]) < 0.55 ? 1 : 0;
