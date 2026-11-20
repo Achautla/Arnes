@@ -1,6 +1,8 @@
 // Utilería de la Fase 2 y terreno irregular (campo, bosque, abismo, cueva, orilla de río)
 import * as THREE from "three";
 import { clay } from "./util.js";
+import { buildPlant, PLANT_DEFAULT } from "./plants.js";
+import { buildCompound } from "./objects.js";
 
 export const EXTRA_PROPS = {
   auto: { label: "Auto", params: {} },
@@ -25,7 +27,18 @@ export const EXTRA_PROPS = {
   columna: { label: "Columna", params: { alto: 300 } },
   losa: { label: "Losa o plataforma", params: { ancho: 400, fondo: 300, alto: 20 } },
   humo: { label: "Humo o vapor", params: { alto: 80, ancho: 40, densidad: 60, semilla: 3, tono: "claro" } },
+  // Fase 6 · bloque 2: piezas de exteriores
+  planta: { label: "Planta (árboles, palmas, mangle, arbustos…)", params: { ...PLANT_DEFAULT } },
+  edificio: { label: "Edificio con ventanas", params: { ancho: 1200, pisos: 6, fondo: 1000, semilla: 2 } },
+  casa: { label: "Casa de pueblo", params: { ancho: 700, fondo: 600, alto: 300, semilla: 4 } },
+  carretera: { label: "Carretera o calle", params: { ancho: 800, largo: 6000 } },
+  banqueta: { label: "Banqueta con guarnición", params: { ancho: 300, largo: 3000 } },
+  agua: { label: "Agua (río, lago, charco)", params: { ancho: 600, fondo: 600 } },
+  cerca: { label: "Cerca de madera o alambre", params: { ancho: 600, alto: 120, semilla: 1 } },
+  poste_luz: { label: "Poste con cables", params: { alto: 800 } },
+  compuesto: { label: "Objeto propio (editor)", params: {}, hidden: true },
 };
+export const SET_PIECES = ["planta", "edificio", "casa", "carretera", "banqueta", "agua", "cerca", "poste_luz"];
 
 // Humo: una lámina que siempre mira a la cámara, con volutas de ruido. No genera contorno ni sombra,
 // así que cada estilo lo lee como valor: en el grabado se vuelve volutas claras entre el rayado.
@@ -55,7 +68,7 @@ export function buildSmoke(p, g) {
   m.userData.noLines = true; m.userData.noContact = true; m.castShadow = false; m.receiveShadow = false; m.renderOrder = 5; m.frustumCulled = false;
   g.add(m);
 }
-export const TERRAIN_TYPES = { campo: "Campo", bosque: "Bosque", abismo: "Precipicio o abismo", cueva: "Cueva", rio: "Orilla de río" };
+export const TERRAIN_TYPES = { campo: "Campo", bosque: "Bosque", selva: "Selva", abismo: "Precipicio o abismo", acantilado: "Acantilado sobre el mar", cueva: "Cueva", rio: "Orilla de río", rio_pendiente: "Río en pendiente (rápidos)", lago: "Lago", manglar: "Manglar", desierto: "Desierto (dunas)" };
 export const TERRAIN = { terreno: { label: "Terreno irregular", params: { tipo: "campo", ancho: 3000, relieve: 120, semilla: 7 } } };
 
 const cm = v => v / 100;
@@ -196,6 +209,44 @@ export function buildExtra(type, p, g) {
     case "columna": { const h = cm(p.alto); cyl(g, 0.22, 0.22, h, 0, h / 2, 0, 24); box(g, 0.55, 0.12, 0.55, 0, 0.06, 0); box(g, 0.55, 0.12, 0.55, 0, h - 0.06, 0); return true; }
     case "losa": { box(g, cm(p.ancho), cm(p.alto), cm(p.fondo), 0, cm(p.alto) / 2, 0); return true; }
     case "terreno": { buildTerrain(g, p); return true; }
+    case "planta": { buildPlant(p, g); return true; }
+    case "compuesto": { buildCompound(p, g); return true; }
+    case "edificio": { buildBuilding(g, p); return true; }
+    case "casa": { buildHouse(g, p); return true; }
+    case "carretera": {
+      const w = cm(p.ancho), L = cm(p.largo);
+      const road = box(g, w, 0.02, L, 0, 0.01, 0); road.userData.part = { color: "#3c3d3f", tex: "piedra" };
+      for (let z = -L / 2 + 1.5; z < L / 2 - 1; z += 6) { const d = box(g, 0.14, 0.004, 3, 0, 0.022, z); d.userData.part = { color: "#e8e2c8" }; d.castShadow = false; }
+      for (const s of [-1, 1]) { const e = box(g, 0.1, 0.004, L, s * (w / 2 - 0.25), 0.022, 0); e.userData.part = { color: "#e8e2c8" }; e.castShadow = false; }
+      g.userData.parts = true; return true;
+    }
+    case "banqueta": {
+      const w = cm(p.ancho), L = cm(p.largo);
+      const walk = box(g, w, 0.15, L, 0, 0.075, 0); walk.userData.part = { color: "#a7a39a", tex: "piedra" };
+      const curb = box(g, 0.15, 0.18, L, w / 2, 0.09, 0); curb.userData.part = { color: "#8d8a83" };
+      for (let z = -L / 2; z < L / 2; z += 1.2) { const j = box(g, w, 0.153, 0.01, 0, 0.076, z); j.userData.part = { color: "#8d8a83" }; j.castShadow = false; }
+      g.userData.parts = true; return true;
+    }
+    case "agua": {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(cm(p.ancho), cm(p.fondo), 24, 24), clay);
+      const pp = m.geometry.getAttribute("position"); for (let i = 0; i < pp.count; i++) pp.setZ(i, Math.sin(pp.getX(i) * 3.1) * Math.cos(pp.getY(i) * 2.3) * 0.015); m.geometry.computeVertexNormals();
+      m.rotation.x = -Math.PI / 2; m.position.y = 0.02; m.receiveShadow = true; m.userData.part = { color: "#6f8f9c", tex: "lisa" }; m.userData.water = true;
+      g.add(m); g.userData.parts = true; return true;
+    }
+    case "cerca": {
+      const w = cm(p.ancho), h = cm(p.alto), n = Math.max(2, Math.round(w / 1.8)), R = rng(p.semilla || 1);
+      for (let i = 0; i <= n; i++) { const x = -w / 2 + i * w / n, post = cyl(g, 0.05, 0.06, h, x + (R() - 0.5) * 0.06, h / 2, 0, 7); post.rotation.z = (R() - 0.5) * 0.08; post.userData.part = { color: "#6f5640", tex: "madera" }; }
+      for (const y of [h * 0.35, h * 0.8]) { const rail = box(g, w, 0.07, 0.03, 0, y, 0.05); rail.rotation.z = (R() - 0.5) * 0.02; rail.userData.part = { color: "#7a6048", tex: "madera" }; }
+      g.userData.parts = true; return true;
+    }
+    case "poste_luz": {
+      const h = cm(p.alto); const post = cyl(g, 0.11, 0.14, h, 0, h / 2, 0, 9); post.userData.part = { color: "#6f5640", tex: "madera" };
+      const arm = box(g, 1.6, 0.1, 0.1, 0, h - 0.6, 0); arm.userData.part = { color: "#6f5640", tex: "madera" };
+      for (const x of [-0.65, 0, 0.65]) { const ins = cyl(g, 0.04, 0.05, 0.14, x, h - 0.48, 0, 8); ins.userData.part = { color: "#d8d8d0" }; }
+      // cables que cuelgan hacia el siguiente poste
+      for (const x of [-0.65, 0, 0.65]) { const pts = []; for (let i = 0; i <= 12; i++) { const t = i / 12; pts.push(new THREE.Vector3(x, h - 0.42 - Math.sin(t * Math.PI) * 0.6, t * 12)); } const c = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 24, 0.008, 4), clay); c.userData.part = { color: "#222222" }; c.castShadow = true; g.add(c); }
+      g.userData.parts = true; return true;
+    }
   }
   return false;
 }
@@ -222,6 +273,11 @@ function buildTerrain(g, p) {
     if (tipo === "abismo") { const e = z + 1.5 + (n(x * 0.4, 3) - 0.5) * 1.2; if (e < 0) y = -Math.min(A * 8, -e * A * 6) - Math.max(0, y); }
     if (tipo === "rio") { const dz = Math.abs(z - 3.2 - (n(x * 0.15, 1) - 0.5) * 3); if (dz < 1.6) y -= (1 - dz / 1.6) * Math.max(0.6, A * 0.6); }
     if (tipo === "cueva") y *= 0.25;
+    if (tipo === "rio_pendiente") { y += -z * A * 0.35 * flat; const dx = Math.abs(x - (n(z * 0.15, 2) - 0.5) * 4); if (dx < 1.8) y -= (1 - dx / 1.8) * Math.max(0.5, A * 0.5); }
+    if (tipo === "lago") { const r2 = Math.hypot(x, z - 7), edge = 5 + (n(Math.atan2(z - 7, x) * 2, 4) - 0.5) * 2.5; if (r2 < edge + 2) y -= Math.max(0, 1 - (r2 - edge) / 2) * Math.max(0.8, A * 0.8); }
+    if (tipo === "manglar") y = y * 0.15 - 0.05;
+    if (tipo === "desierto") { const r = Math.hypot(x, z), f2 = Math.min(1, Math.max(0, (r - 3) / 5)); y = (Math.pow(Math.abs(Math.sin(x * 0.18 + n(x * 0.05, z * 0.05) * 4)), 1.6) * 1.8 + (n(x * 0.1, z * 0.1) - 0.5) * 1.5) * A * f2; }
+    if (tipo === "acantilado") { const e = z + 3 + (n(x * 0.3, 7) - 0.5) * 2.5; if (e < 0) y = -A * 14 - Math.max(0, y); else y += Math.min(1, e / 3) * A * 0.3; }
     return y;
   };
   const geo = new THREE.PlaneGeometry(W, W, N, N); geo.rotateX(-Math.PI / 2);
@@ -229,17 +285,38 @@ function buildTerrain(g, p) {
   for (let i = 0; i < pos.count; i++) pos.setY(i, heightAt(pos.getX(i), pos.getZ(i)));
   geo.computeVertexNormals();
   const m = new THREE.Mesh(geo, clay); m.receiveShadow = true; m.castShadow = true; m.userData.terrain = true; g.add(m);
-  if (tipo === "rio") {
-    const water = new THREE.Mesh(new THREE.PlaneGeometry(W, 3.2), new THREE.MeshStandardMaterial({ color: 0x8fa3ad, roughness: 0.15, metalness: 0.1 }));
-    water.rotation.x = -Math.PI / 2; water.position.set(0, -Math.max(0.6, A * 0.6) * 0.55, 3.2); water.receiveShadow = true; g.add(water);
+  const waterMesh = (w, d, x, y, z, rx = -Math.PI / 2) => { const wm = new THREE.Mesh(new THREE.PlaneGeometry(w, d, 8, 8), clay); wm.rotation.x = rx; wm.position.set(x, y, z); wm.receiveShadow = true; wm.userData.part = { color: "#6f8f9c" }; wm.userData.water = true; g.add(wm); g.userData.parts = true; return wm; };
+  if (tipo === "rio") waterMesh(W, 3.2, 0, -Math.max(0.6, A * 0.6) * 0.55, 3.2);
+  if (tipo === "lago") waterMesh(15, 15, 0, -Math.max(0.8, A * 0.8) * 0.5, 7);
+  if (tipo === "manglar") waterMesh(W, W, 0, 0.02, 0);
+  if (tipo === "acantilado") waterMesh(W, W / 2, 0, -A * 13, -W / 4);
+  if (tipo === "rio_pendiente") {
+    // el agua baja en escalones con rocas que forman los rápidos
+    const R2 = rng(31), d = Math.max(0.5, A * 0.5);
+    for (let zz = -W * 0.3; zz < W * 0.3; zz += 2) { const xc = (n(zz * 0.15, 2) - 0.5) * 4; waterMesh(3.2, 2.2, xc, heightAt(xc + 3, zz) * 0 + (-zz * A * 0.35) - d * 0.55, zz, -Math.PI / 2 + 0.35 * A * 0.3); if (R2() < 0.6) { const t = new THREE.Group(); t.position.set(xc + (R2() - 0.5) * 2.4, -zz * A * 0.35 - d * 0.6, zz); g.add(t); buildExtra("roca", { ancho: 40 + R2() * 60 }, t); } }
   }
-  if (tipo === "bosque" || tipo === "abismo") {
-    const R = rng((p.semilla || 7) + 1), count = tipo === "bosque" ? 26 : 8;
-    for (let i = 0; i < count; i++) {
+  // vegetación propia de cada terreno (especies y densidad); se apoya sobre el relieve
+  const FLORA = {
+    bosque: { n: 26, mix: [["roble", 0.45], ["pino", 0.35], ["arbusto", 0.2]] },
+    abismo: { n: 8, mix: [["pino", 0.7], ["arbusto", 0.3]] },
+    selva: { n: 46, mix: [["ceiba", 0.22], ["palmera", 0.18], ["platanera", 0.2], ["helecho", 0.25], ["arbusto", 0.15]] },
+    manglar: { n: 30, mix: [["mangle", 0.85], ["helecho", 0.15]] },
+    desierto: { n: 12, mix: [["cactus", 0.7], ["seco", 0.15], ["arbusto", 0.15]] },
+    campo: { n: 14, mix: [["pasto", 0.55], ["roble", 0.15], ["flores", 0.3]] },
+    rio: { n: 14, mix: [["sauce", 0.3], ["pasto", 0.4], ["helecho", 0.3]] },
+    rio_pendiente: { n: 18, mix: [["pino", 0.5], ["helecho", 0.3], ["arbusto", 0.2]] },
+    lago: { n: 16, mix: [["sauce", 0.3], ["pasto", 0.4], ["roble", 0.3]] },
+    acantilado: { n: 8, mix: [["pasto", 0.6], ["arbusto", 0.4]] },
+  }[tipo];
+  if (FLORA) {
+    const R = rng((p.semilla || 7) + 1);
+    for (let i = 0; i < FLORA.n; i++) {
       const x = (R() - 0.5) * W * 0.6, z = (R() - 0.5) * W * 0.6;
-      if (Math.hypot(x, z) < 3.5 || (tipo === "abismo" && z < -1.5)) continue;
+      if (Math.hypot(x, z) < 3.5 || (tipo === "abismo" && z < -1.5) || (tipo === "acantilado" && z < -2.5) || (tipo === "lago" && Math.hypot(x, z - 7) < 6)) continue;
+      let r = R(), sp = FLORA.mix[0][0]; for (const [k, w] of FLORA.mix) { if (r < w) { sp = k; break; } r -= w; }
       const t = new THREE.Group(); t.position.set(x, 0, z); g.add(t);
-      buildExtra(R() < 0.75 ? "arbol" : "arbusto", { alto: 400 + R() * 500, ancho: 100 + R() * 80 }, t);
+      buildPlant({ especie: sp, semilla: Math.floor(R() * 999), alto: null, follaje: null, grosor: null }, t);
+      t.scale.setScalar(0.7 + R() * 0.6); t.rotation.y = R() * 6.28;
       t.position.y = heightAt(x, z) - 0.05;
     }
   }
@@ -248,4 +325,38 @@ function buildTerrain(g, p) {
     for (let i = 0; i < 6; i++) { const t = new THREE.Group(); t.position.set((R() - 0.5) * 10, 0, -1 + R() * 0.8); g.add(t); buildExtra("roca", { ancho: 40 + R() * 70 }, t); }
   }
   g.userData.hidesFloor = true; // el terreno reemplaza al piso
+}
+
+// Edificio de ciudad: volumen con hileras de ventanas hundidas, cornisa y planta baja con cortinas
+function buildBuilding(g, p) {
+  const w = cm(p.ancho), d = cm(p.fondo), floors = Math.max(1, Math.round(p.pisos)), fh = 3.1, h = floors * fh + 1.2, R = rng(p.semilla || 2);
+  const tone = ["#9c8a78", "#a9a294", "#8f7f72", "#b2a48e", "#7e7468"][Math.floor(R() * 5)];
+  const body = box(g, w, h, d, 0, h / 2, 0); body.userData.part = { color: tone, tex: R() < 0.5 ? "ladrillo" : "piedra" };
+  const cornice = box(g, w + 0.3, 0.35, d + 0.3, 0, h + 0.17, 0); cornice.userData.part = { color: "#8d8a83" };
+  const cols = Math.max(1, Math.round(w / 2.2)), win = Math.min(1.2, w / cols * 0.55);
+  for (const face of [0, 1, 2, 3]) {
+    const along = face % 2 ? d : w, nc = Math.max(1, Math.round(along / 2.2));
+    for (let f = 0; f < floors; f++) for (let c = 0; c < nc; c++) {
+      const u = -along / 2 + (c + 0.5) * along / nc, y = 1.2 + f * fh + fh * 0.5;
+      const lit = R() < 0.25;
+      const m = new THREE.Mesh(new THREE.BoxGeometry(win, fh * 0.5, 0.08), clay); m.userData.part = { color: lit ? "#e8c97a" : "#2f3438" };
+      const sill = new THREE.Mesh(new THREE.BoxGeometry(win + 0.15, 0.08, 0.16), clay); sill.userData.part = { color: "#8d8a83" };
+      const off = (face % 2 ? w : d) / 2 + 0.01, rot = [0, Math.PI / 2, Math.PI, -Math.PI / 2][face];
+      for (const [mm, dy, dz] of [[m, 0, -0.02], [sill, -fh * 0.27, 0.04]]) { mm.position.set(Math.sin(rot) * (off + dz) + Math.cos(rot) * u, y + dy, Math.cos(rot) * (off + dz) - Math.sin(rot) * u); mm.rotation.y = rot; mm.castShadow = false; mm.receiveShadow = true; g.add(mm); }
+    }
+  }
+  void cols;
+  g.userData.parts = true;
+}
+// Casa de pueblo: muros, techo de dos aguas con teja, puerta y ventanas con marco
+function buildHouse(g, p) {
+  const w = cm(p.ancho), d = cm(p.fondo), h = cm(p.alto), R = rng(p.semilla || 4);
+  const wall = box(g, w, h, d, 0, h / 2, 0); wall.userData.part = { color: ["#d9c7a8", "#c98f6a", "#e0d6c2", "#9fb3a8", "#d4a24c"][Math.floor(R() * 5)], tex: "piedra" };
+  const roofH = Math.min(w, d) * 0.32, sh = new THREE.Shape(); sh.moveTo(-w / 2 - 0.35, 0); sh.lineTo(w / 2 + 0.35, 0); sh.lineTo(0, roofH); sh.closePath();
+  const roof = new THREE.Mesh(new THREE.ExtrudeGeometry(sh, { depth: d + 0.6, bevelEnabled: false }), clay); roof.position.set(0, h, -d / 2 - 0.3); roof.castShadow = roof.receiveShadow = true; roof.userData.part = { color: "#9a4a32", tex: "ladrillo" }; g.add(roof);
+  const door = box(g, 0.95, 2.1, 0.06, -w * 0.2, 1.05, d / 2 + 0.02); door.userData.part = { color: "#5a3a26", tex: "madera" };
+  for (const x of [w * 0.15, w * 0.36]) { if (Math.abs(x + w * 0.2) < 1) continue; const fr = box(g, 1.05, 1.15, 0.08, x, 1.55, d / 2 + 0.03); fr.userData.part = { color: "#f0ebe0" }; const gl = box(g, 0.85, 0.95, 0.1, x, 1.55, d / 2 + 0.03); gl.userData.part = { color: "#2f3438" }; }
+  for (const x of [-w * 0.3, w * 0.3]) { const fr = box(g, 1.05, 1.15, 0.08, x, 1.55, -d / 2 - 0.03); fr.userData.part = { color: "#f0ebe0" }; }
+  const step = box(g, 1.4, 0.18, 0.5, -w * 0.2, 0.09, d / 2 + 0.25); step.userData.part = { color: "#a7a39a" };
+  g.userData.parts = true;
 }

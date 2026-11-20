@@ -305,3 +305,20 @@ body.drilling #tbar, body.drilling .hud { display: none !important; }
 .ailist { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
 .ailist li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .ailist code { font-size: 12px; color: var(--muted); }
+/* Comunidad (Fase 6, bloque 3) */
+.cgrid { list-style: none; padding: 0; margin: 12px 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.ccard { border: 1px solid var(--line); border-radius: 10px; background: var(--graphite-2); overflow: hidden; }
+.cmain { width: 100%; border: 0; background: none; padding: 0 0 8px; display: grid; gap: 4px; text-align: left; color: inherit; }
+.cmain img, .cnothumb { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: grid; place-items: center; background: var(--graphite-3, #2a2e32); color: var(--muted); font-size: 13px; }
+.cmain strong { padding: 0 8px; font-size: 14.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmain small { padding: 0 8px; color: var(--muted); font-size: 12.5px; }
+.cav { border-radius: 50%; object-fit: cover; flex: none; }
+.cav-0 { display: inline-grid; place-items: center; background: var(--blue-deep); color: #fff; font-weight: 700; }
+.cby { display: flex; align-items: center; gap: 10px; }
+.cprof { display: flex; gap: 14px; align-items: flex-start; margin: 10px 0; }
+.cprof h2 { margin: 0; }
+.cdet { display: grid; gap: 8px; margin-top: 8px; }
+.cdet > img { width: 100%; max-height: 60vh; object-fit: contain; border-radius: 10px; background: #fff; }
+.cdet h2 { margin: 4px 0 0; }
+#pubwin .chk { display: flex; gap: 8px; align-items: center; min-height: 40px; }
+#pubwin .thumbprev { max-width: 220px; border-radius: 8px; border: 1px solid var(--line); }

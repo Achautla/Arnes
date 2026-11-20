@@ -1,19 +1,24 @@
 // Pantalla de inicio: entrar (nube) → mis proyectos → área de diseño
 import * as cloud from "./cloud.js";
 import { escapeHtml as esc, uid } from "./util.js";
+import { createCommunity } from "./community.js";
 
-export function createHome({ store, onOpen, makeExample, makeBlank, onLogin }) {
+export function createHome({ store, onOpen, makeExample, makeBlank, onLogin, importItem }) {
   const el = document.createElement("div");
   el.id = "home"; el.hidden = true; el.setAttribute("role", "dialog"); el.setAttribute("aria-label", "Mis proyectos");
   document.body.appendChild(el);
   let screen = "projects", busy = false, msg = "", confirmDel = null, confirmAcct = false, remote = [], lastEmail = "";
   const skipped = () => sessionStorage.getItem("arnes-offline") === "1";
+  const community = createCommunity({ el, cloud, esc, back: () => { screen = "projects"; draw(); }, toLogin: () => { screen = "login"; draw(); }, importItem: async (pub, mode) => { hide(); await importItem(pub, mode); } });
 
-  async function show(note = "") {
+  // go: "galeria" | "perfil" | "newpass" | {pub:id} | {user:name}
+  async function show(note = "", go = null) {
     if (note) msg = note;
     el.hidden = false; document.body.classList.add("home-open");
     screen = cloud.configured() && !cloud.user() && !skipped() ? "login" : "projects";
     if (note && !cloud.user() && cloud.configured()) screen = "login";
+    if (go === "newpass") screen = "newpass";
+    else if (go) { screen = "community"; return community.open(go); }
     await draw();
   }
   function hide() { el.hidden = true; document.body.classList.remove("home-open"); }
@@ -27,6 +32,30 @@ export function createHome({ store, onOpen, makeExample, makeBlank, onLogin }) {
 
   async function draw() {
     const head = `<div class="home-h"><span class="wordmark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="4.5" r="2.5"/><path d="M12 7v7M12 14l-4 7M12 14l4 7M5 10l7-1 7 1"/></svg><span>ARNÉS</span></span></div>`;
+    if (screen === "community") return community.draw();
+    if (screen === "forgot") {
+      el.innerHTML = `<div class="home-in">${head}
+        <h2>Recuperar tu cuenta</h2>
+        <p class="sub">Escribe el correo con el que creaste tu cuenta. Te mandamos un enlace; al abrirlo vuelves a Arnés y escribes una contraseña nueva. Revisa también la carpeta de spam.</p>
+        <form id="h-forgot" class="hform">
+          <label class="fld"><span>Correo</span><input type="email" id="h-email" autocomplete="email" required value="${esc(lastEmail)}"></label>
+          <p class="hmsg" role="status">${esc(msg)}</p>
+          <div class="row"><button class="btn accent" type="submit" ${busy ? "disabled" : ""}>${busy ? "Enviando…" : "Enviar enlace"}</button><button class="btn" type="button" data-h="login">Volver</button></div>
+        </form></div>`;
+      return;
+    }
+    if (screen === "newpass") {
+      el.innerHTML = `<div class="home-in">${head}
+        <h2>Contraseña nueva</h2>
+        <p class="sub">Entraste con el enlace de tu correo${cloud.user()?.email ? ` (${esc(cloud.user().email)})` : ""}. Escribe tu contraseña nueva dos veces.</p>
+        <form id="h-newpass" class="hform">
+          <label class="fld"><span>Contraseña nueva</span><input type="password" id="h-pw" autocomplete="new-password" minlength="6" required></label>
+          <label class="fld"><span>Repítela</span><input type="password" id="h-pw2" autocomplete="new-password" minlength="6" required></label>
+          <p class="hmsg" role="status">${esc(msg)}</p>
+          <div class="row"><button class="btn accent" type="submit" ${busy ? "disabled" : ""}>${busy ? "Guardando…" : "Guardar contraseña"}</button></div>
+        </form></div>`;
+      return;
+    }
     if (screen === "login") {
       el.innerHTML = `<div class="home-in">${head}
         <h2>Entra para guardar en la nube</h2>
@@ -38,7 +67,9 @@ export function createHome({ store, onOpen, makeExample, makeBlank, onLogin }) {
           <div class="row"><button class="btn accent" type="submit" data-h="in" ${busy ? "disabled" : ""}>Entrar</button><button class="btn" type="button" data-h="up" ${busy ? "disabled" : ""}>Crear cuenta</button></div>
         </form>
         <div class="oauth"><span class="sub">o</span><button class="btn fb" data-h="fb" ${busy ? "disabled" : ""}><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M13.5 21v-7.5h2.5l.4-3h-2.9V8.6c0-.9.3-1.5 1.5-1.5H16.6V4.4c-.3 0-1.2-.1-2.3-.1-2.3 0-3.8 1.4-3.8 3.9v2.3H8v3h2.5V21z"/></svg>Entrar con Facebook</button></div>
-        <button class="linkbtn" data-h="offline">Usar sin cuenta, solo en este dispositivo</button></div>`;
+        <button class="linkbtn" data-h="forgot">¿Olvidaste tu contraseña?</button>
+        <button class="linkbtn" data-h="offline">Usar sin cuenta, solo en este dispositivo</button>
+        <button class="linkbtn" data-h="gallery">Ver la galería sin entrar</button></div>`;
       return;
     }
     const list = await store.list();
@@ -51,6 +82,7 @@ export function createHome({ store, onOpen, makeExample, makeBlank, onLogin }) {
       <div class="home-bar"><h2>Mis proyectos</h2>
         <span class="acct">${cloud.configured() ? (u ? `${esc(u.email)} · <button class="linkbtn" data-h="out">Salir</button> · <button class="linkbtn" data-h="delacct">Borrar mi cuenta</button>` : `<button class="linkbtn" data-h="login">Entrar a la nube</button>`) : `<small>Guardado en este dispositivo${cloud.reachable() ? "" : " · la nube funciona en la versión de GitHub Pages"}</small>`}</span></div>
       <div class="row"><button class="btn accent" data-h="new">Nuevo proyecto</button><button class="btn" data-h="example">Abrir el ejemplo</button>${cur ? `<button class="btn" data-h="back">Volver al que tenía abierto</button>` : ""}</div>
+      ${cloud.configured() ? `<div class="row"><button class="btn" data-h="gallery">Galería de la comunidad</button>${u ? `<button class="btn" data-h="profile">Mi perfil y publicaciones</button>` : ""}</div>` : ""}
       ${confirmAcct ? `<p class="pconf">¿Borrar tu cuenta y todo lo que guardaste en la nube (proyectos, poses, personajes y estilos)? Lo guardado en este dispositivo se queda. <button class="btn danger" data-h="delacct-yes">Borrar mi cuenta</button><button class="btn" data-h="delacct-no">Conservar mi cuenta</button></p>` : ""}
       <p class="hmsg" role="status">${esc(msg)}</p>
       <ul class="plist">${list.map(e => `<li class="pcard${e.id === cur ? " cur" : ""}">
@@ -65,8 +97,8 @@ export function createHome({ store, onOpen, makeExample, makeBlank, onLogin }) {
 
   async function open(p) { hide(); msg = ""; await onOpen(p); }
 
-  el.addEventListener("submit", e => { e.preventDefault(); act("in"); });
-  el.addEventListener("click", e => { const b = e.target.closest("[data-h]"); if (b && b.dataset.h !== "in") act(b.dataset.h, b.dataset.id); });
+  el.addEventListener("submit", e => { e.preventDefault(); if (screen === "community") return; act(e.target.id === "h-forgot" ? "send-recover" : e.target.id === "h-newpass" ? "set-pass" : "in"); });
+  el.addEventListener("click", e => { if (screen === "community") return; const b = e.target.closest("[data-h]"); if (b && b.dataset.h !== "in") act(b.dataset.h, b.dataset.id); });
 
   async function act(a, id) {
     msg = "";
@@ -81,6 +113,25 @@ export function createHome({ store, onOpen, makeExample, makeBlank, onLogin }) {
         if (!u) { msg = "Te enviamos un correo para confirmar la cuenta. Ábrelo y luego entra aquí."; return draw(); }
         screen = "projects"; onLogin?.(); return draw();
       }
+      if (a === "forgot") { lastEmail = el.querySelector("#h-email")?.value.trim() || lastEmail; screen = "forgot"; return draw(); }
+      if (a === "send-recover") {
+        const email = el.querySelector("#h-email").value.trim(); lastEmail = email;
+        if (!email) { msg = "Escribe tu correo."; return draw(); }
+        busy = true; draw();
+        await cloud.recover(email); busy = false;
+        msg = `Si ${email} tiene cuenta, ya te llegó un correo con el enlace. Ábrelo en este mismo teléfono o computadora.`; return draw();
+      }
+      if (a === "set-pass") {
+        const pw = el.querySelector("#h-pw").value, pw2 = el.querySelector("#h-pw2").value;
+        if (pw.length < 6) { msg = "La contraseña debe tener al menos 6 caracteres."; return draw(); }
+        if (pw !== pw2) { msg = "Las dos contraseñas no coinciden."; return draw(); }
+        busy = true; draw();
+        await cloud.setPassword(pw); busy = false;
+        msg = "Listo: tu contraseña nueva quedó guardada. Ya puedes entrar con ella en cualquier dispositivo.";
+        screen = "projects"; onLogin?.(); return draw();
+      }
+      if (a === "gallery") { screen = "community"; return community.open("galeria"); }
+      if (a === "profile") { screen = "community"; return community.open("perfil"); }
       if (a === "fb") { busy = true; draw(); location.href = cloud.oauthUrl("facebook"); return; }
       if (a === "offline") { sessionStorage.setItem("arnes-offline", "1"); screen = "projects"; return draw(); }
       if (a === "login") { screen = "login"; return draw(); }
@@ -122,6 +173,7 @@ export function createHome({ store, onOpen, makeExample, makeBlank, onLogin }) {
       }
     } catch (e) { busy = false; msg = e.message || String(e); draw(); }
   }
+  community.setScreen = v => { screen = v; };
 
   // Sincroniza en segundo plano después de cada guardado local
   let syncTimer = null;
@@ -131,5 +183,5 @@ export function createHome({ store, onOpen, makeExample, makeBlank, onLogin }) {
     syncTimer = setTimeout(() => cloud.push(store.project).then(() => store.emit("synced")).catch(() => store.emit("sync-failed")), 2500);
   });
 
-  return { show, hide };
+  return { show, hide, community };
 }

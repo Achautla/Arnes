@@ -6,10 +6,15 @@ import { DEG, RAD, clamp, uid, clone, round, escapeHtml as esc, saveFile, kelvin
 import * as M from "./mannequin.js";
 import { POSE_LIBRARY, POSE_CATS } from "./poses.js";
 import { PRIMITIVES, PROPS, EXTRA_PROPS, TERRAIN, TERRAIN_TYPES, ALL_PROPS, buildProp } from "./props.js";
+import { SET_PIECES } from "./props2.js";
 import { LIGHT_TYPES, newLight, buildLight, buildLightIcon, presetNoir, presetDay, presetSunset, presetMoon, presetNeon, presetFire, presetBacklight, presetUnder, presetBlinds, PRESETS, GOBOS } from "./lights.js";
 import { Composer, renderToBlob, MODES, LIGHT_NOTES, STYLE_KEYS, BASE_STYLES, FX } from "./render.js";
 import { applyAtmosphere, aspectOf, sceneFor, disposeScene, sceneSpan } from "./scenes.js";
-import { SCENARIOS } from "./scenarios.js";
+import { SCENARIOS, SCENARIO_GROUPS } from "./scenarios.js";
+import { SPECIES } from "./plants.js";
+import { SHAPES, OBJECT_PRESETS, newPart, myObjects, writeMyObjects } from "./objects.js";
+import { ATMOS, applyAtmo } from "./atmos.js";
+import { applyHolds } from "./scenes.js";
 import { createPageEditor, styleView, FORMATS, newPage } from "./page.js";
 import { detectLocal, detectAI, readingOrder, toPagePanels } from "./pageread.js";
 import { readPanel, KP_LABELS } from "./scenebuild.js";
@@ -32,6 +37,7 @@ import * as T from "./taller.js";
 import { learnStyle, drawInStyle, describeStyle, STYLE_PARAMS, getParam, setParam, mixStyles } from "./style.js";
 import { aiReady, chain as aiChain, PROVIDERS } from "./ai.js";
 import { openAiWindow } from "./aiwin.js";
+import { PUB_KINDS } from "./cloud.js";
 import { TEMPLATES as C_TPL, SURFACES as C_SURF, ARMORS as C_ARMOR, QUICK_POSES as C_POSES, newCreatureParams, buildCreature, setCreatureStyle, quickPose, creatureJoints, applyCreaturePose, creatureFromDrawing } from "./creature.js";
 
 const PAPER = 0xf1f0ec, DARK = 0x111214, BLUE = 0x7cc0ea, BLUE_DEEP = 0x3e7fb0;
@@ -165,7 +171,7 @@ function buildObject(o) {
   }
   g.userData.objId = o.id;
   g.traverse(c => { c.userData.objId = o.id; });
-  if (o.kind !== "creature" && (o.color || o.tex)) paint(g, o.color || null, !["clay", "grabado"].includes(store.v.view.mode), o.tex);
+  if (o.kind !== "creature" && (o.color || o.tex || g.userData.parts)) paint(g, o.color || null, !["clay", "grabado"].includes(store.v.view.mode), o.tex);
   if (store.v.view.forms && o.kind === "figure") addForms(g);
   g.updateMatrixWorld(true);
   world.set(o.id, g); content.add(g);
@@ -240,6 +246,8 @@ function rebuildLights() {
     iconGroup.add(icon);
     lights.set(def.id, { light, icon });
   }
+  // el gizmo no puede quedar pegado al icono viejo de una luz (avisaba en cada cuadro)
+  if (tcontrols.object?.userData.lightId) attachGizmo();
 }
 function applyBackground() {
   const v = store.v.view, dark = v.background === "oscuro", span = sceneSpan(store.v.objects);
@@ -485,8 +493,9 @@ tcontrols.addEventListener("mouseUp", () => {
     const o = findObj(obj.userData.objId); if (!o) return;
     if (obj.position.y < 0 && o.kind === "figure") obj.position.y = 0;
     o.pos = obj.position.toArray().map(v => round(v, 3));
+    if (o.hold) setHold(o, `${o.hold.obj}|${o.hold.end}`); // moverlo con las flechas ajusta cómo lo sostiene
     if (o.kind === "figure") o.rotY = round(obj.rotation.y * RAD, 1);
-    else { o.rot = [obj.rotation.x, obj.rotation.y, obj.rotation.z].map(v => round(v * RAD, 1)); o.scale = obj.scale.toArray().map(v => round(v, 3)); }
+    else { o.rot = [obj.rotation.x, obj.rotation.y, obj.rotation.z].map(v => round(v * RAD, 1)); o.scale = obj.scale.toArray().map(v => round(v, 3)); if (o.kind === "creature") { applyBackground(); rebuildLights(); } }
   }
   store.commit(); renderPanel();
 });
@@ -674,6 +683,7 @@ function updateHelpers() {
       const t = anchorTarget(a); if (t) M.solveIK(f, end, t, ob.relaxed, 8);
     }
   }
+  if (store.v.objects.some(x => x.hold)) applyHolds(store.v.objects, figs, world, tcontrols.dragging ? tcontrols.object?.userData.objId : null);
   for (const [n, h] of Object.entries(handles)) {
     h.visible = !!(showH && fig);
     if (!h.visible) continue;
@@ -862,6 +872,7 @@ function deleteSelected() {
     v.objects = v.objects.filter(o => o.id !== id);
     for (const o of v.objects) if (o.gaze === id) o.gaze = null;
     const g = world.get(id); content.remove(g); world.delete(id); figs.delete(id);
+    applyBackground();
   } else if (findLight(id)) { v.lights = v.lights.filter(l => l.id !== id); rebuildLights(); }
   ui.sel = null; ui.joint = null; tcontrols.detach();
   store.commit(); buildRuler(); renderPanel(); markDirty();
@@ -992,7 +1003,7 @@ function renderPanel() {
   else if (t === "pose") h = panelPose();
   else if (t === "taller") h = T.panelHtml(selObj(), ui, { pill, esc, slider, toggle, HAND_POSES: M.HAND_POSES, SKIN_TONES, GARMENTS, CLOTH_TEX, ACCESSORIES });
   else if (t === "camara") h = panelCamara();
-  else if (t === "pagina") h = pageEd.panelHtml(pill) + `<h3>Página desde una foto</h3><p class="sub">Toma foto o escanea una página tuya: Arnés encuentra las viñetas, su orden de lectura y su proporción, y crea una página nueva con una viñeta vacía por cada recuadro.${aiConf().key ? " Con un servicio de IA, se corrigen los recuadros inclinados o sin marco y se describe cada viñeta." : ""}</p>
+  else if (t === "pagina") h = pageEd.panelHtml(pill) + `<div class="row"><button class="btn" data-act="share-page">Compartir esta página</button></div><h3>Página desde una foto</h3><p class="sub">Toma foto o escanea una página tuya: Arnés encuentra las viñetas, su orden de lectura y su proporción, y crea una página nueva con una viñeta vacía por cada recuadro.${aiConf().key ? " Con un servicio de IA, se corrigen los recuadros inclinados o sin marco y se describe cada viñeta." : ""}</p>
     <label class="btn wide filebtn">${ui.pageBusy ? "Leyendo la página…" : "Elegir foto de la página"}<input type="file" id="pagefile" accept="image/*" hidden ${ui.pageBusy ? "disabled" : ""}></label>
     ${ui.pageReport ? `<div class="card calrep">${ui.pageReport.map(l => `<p class="sub">${esc(l)}</p>`).join("")}</div>` : ""}`;
   else h = panelLuz();
@@ -1007,6 +1018,7 @@ function panelEscena() {
   let h = `<h2>Viñetas</h2><p class="sub">Cada viñeta es su propio cuarto 3D. Duplícala para armar la siguiente sin rehacer nada.</p>
   <div class="vlist">${P.vinetas.map((x, i) => `<button class="vitem${i === P.cur ? " on" : ""}" data-act="vineta" data-val="${i}"><b>${i + 1}</b><span>${esc(x.name)}</span></button>`).join("")}</div>
   <div class="row"><button class="btn" data-act="v-dup">Duplicar viñeta</button><button class="btn" data-act="v-new">Nueva vacía</button></div>
+  <div class="row"><button class="btn" data-act="share-v" data-val="vineta">Compartir esta viñeta</button><button class="btn" data-act="share-v" data-val="escenario">Compartir su escenario</button></div>
   ${panelDibujo(v)}
   <div class="row"><input class="text" id="vname" value="${esc(v.name)}" aria-label="Nombre de la viñeta"><button class="btn" data-act="v-ren">Renombrar</button><button class="btn danger" data-act="v-del" ${P.vinetas.length < 2 ? "disabled" : ""}>Borrar</button></div>`;
   const chars = savedChars();
@@ -1014,9 +1026,15 @@ function panelEscena() {
     <details class="more"><summary>Administrar</summary><div class="adds">${chars.map((c, i) => `<button class="btn danger" data-act="char-del" data-val="${i}">Borrar ${esc(c.name)}</button>`).join("")}</div></details>`;
   h += `<h2>Agregar</h2><div class="adds"><button class="btn accent" data-act="add-fig">+ Personaje</button><button class="btn accent" data-act="add-creature">+ Criatura</button>
     ${Object.entries(PRIMITIVES).map(([k, d]) => `<button class="btn" data-act="add" data-val="${k}">${d.label}</button>`).join("")}</div>
-    <details class="more"><summary>Utilería (${Object.keys(PROPS).length + Object.keys(EXTRA_PROPS).length})</summary><div class="adds">${Object.entries({ ...PROPS, ...EXTRA_PROPS }).map(([k, d]) => `<button class="btn" data-act="add" data-val="${k}">${d.label}</button>`).join("")}</div></details>
+    <details class="more"><summary>Utilería (${Object.keys(PROPS).length + Object.keys(EXTRA_PROPS).filter(k => !EXTRA_PROPS[k].hidden && !SET_PIECES.includes(k)).length})</summary><div class="adds">${Object.entries({ ...PROPS, ...EXTRA_PROPS }).filter(([k, d]) => !d.hidden && !SET_PIECES.includes(k)).map(([k, d]) => `<button class="btn" data-act="add" data-val="${k}">${d.label}</button>`).join("")}</div></details>
+    <details class="more"><summary>Plantas y piezas de exteriores (${Object.keys(SPECIES).length + SET_PIECES.length - 1})</summary><p class="pl">Plantas</p><div class="adds">${Object.entries(SPECIES).map(([k, d]) => `<button class="btn" data-act="add-plant" data-val="${k}">${d.label}</button>`).join("")}</div>
+      <p class="pl">Ciudad, pueblo y caminos</p><div class="adds">${SET_PIECES.filter(k => k !== "planta").map(k => `<button class="btn" data-act="add" data-val="${k}">${EXTRA_PROPS[k].label}</button>`).join("")}</div></details>
+    <details class="more"><summary>Objetos propios y accesorios (${Object.keys(OBJECT_PRESETS).length + myObjects().length})</summary><p class="sub">Arma objetos con piezas simples: cada pieza con su forma, tamaño, giro, color y textura. Se guardan como datos, se comparten y se pueden sostener con la mano.</p>
+      <div class="adds"><button class="btn accent" data-act="obj-new">+ Objeto en blanco</button>${Object.entries(OBJECT_PRESETS).map(([k, d]) => `<button class="btn" data-act="obj-preset" data-val="${k}">${d.label}</button>`).join("")}</div>
+      ${myObjects().length ? `<p class="pl">Mis objetos</p><div class="adds">${myObjects().map((x, i) => `<span class="saved"><button class="btn" data-act="myobj-add" data-val="${i}">${esc(x.name)}</button><button class="x" data-act="myobj-del" data-val="${i}" aria-label="Borrar ${esc(x.name)}">×</button></span>`).join("")}</div>` : ""}</details>
     <div class="row"><button class="btn" data-act="import-glb">Importar modelo .glb</button><input type="file" id="glbfile" accept=".glb,.gltf,model/gltf-binary" hidden></div>
-    <details class="more"><summary>Escenarios y terreno (${Object.keys(SCENARIOS).length})</summary><p class="sub">Se agregan a esta viñeta como objetos normales: puedes mover o borrar cualquier pieza.</p><div class="adds">${Object.entries(SCENARIOS).map(([k, d]) => `<button class="btn" data-act="scenario" data-val="${k}">${d.label}</button>`).join("")}</div></details>`;
+    <details class="more"><summary>Escenarios y terreno (${Object.keys(SCENARIOS).length})</summary><p class="sub">Se agregan a esta viñeta como objetos normales: puedes mover o borrar cualquier pieza. Los exteriores traen su atmósfera; cámbiala en Luz.</p>
+      ${Object.entries(SCENARIO_GROUPS).map(([gk, gl]) => `<p class="pl">${gl}</p><div class="adds">${Object.entries(SCENARIOS).filter(([, d]) => (d.group || "interior") === gk).map(([k, d]) => `<button class="btn" data-act="scenario" data-val="${k}">${d.label}</button>`).join("")}</div>`).join("")}</details>`;
   h += `<h2>En esta viñeta</h2>`;
   h += v.objects.length ? `<div class="olist">${v.objects.map(o => `<button class="oitem${o.id === ui.sel ? " on" : ""}" data-act="sel" data-val="${o.id}"><span>${esc(o.name)}</span><small>${o.kind === "figure" ? `${o.params.height} cm · ${o.params.heads} cabezas` : o.kind === "creature" ? `${C_TPL[o.cparams.template]?.label || "Criatura"} · ${round(o.cparams.length * (o.scale?.[0] || 1), 1)} m` : (ALL_PROPS()[o.type]?.label || o.type)}</small></button>`).join("")}</div>`
     : `<p class="empty">Todavía no hay nada. Agrega un personaje o un objeto.</p>`;
@@ -1038,7 +1056,9 @@ function propsOf(o) {
     const pp = Object.entries(o.params || {}).filter(([k, val]) => typeof val === "number");
     if (o.type === "humo") h += `<div class="pills">${[["claro", "Humo claro"], ["oscuro", "Humo oscuro"]].map(([k, l]) => pill(k, o.params.tono || "claro", l, "smoke-tone")).join("")}</div><p class="sub">Ponlo sobre un cigarro, una taza o un cañón. Cambia la semilla para otra forma de voluta.</p>`;
     if (o.type === "terreno") h += `<div class="pills">${Object.entries(TERRAIN_TYPES).map(([k, l]) => pill(k, o.params.tipo, l, "terrain")).join("")}</div>`;
-    if (pp.length) h += `<div class="nums">${pp.map(([k, val]) => num("param:" + k, k[0].toUpperCase() + k.slice(1), val, ["escalones", "pisos", "semilla"].includes(k) ? "" : k === "densidad" ? "%" : "cm")).join("")}</div>`;
+    if (o.type === "planta") h += plantPanel(o);
+    if (o.type === "compuesto") h += compoundPanel(o);
+    if (pp.length && o.type !== "planta") h += `<div class="nums">${pp.map(([k, val]) => num("param:" + k, k[0].toUpperCase() + k.slice(1), val, ["escalones", "pisos", "semilla"].includes(k) ? "" : k === "densidad" ? "%" : "cm")).join("")}</div>`;
     h += `<div class="nums">${num("scale", "Escala", Math.round((o.scale?.[0] ?? 1) * 100), "%")}</div>`;
   }
   if (isFig && o.human) h += `<h3>Cuerpo realista</h3><p class="sub">Cuerpo, rostro, piel, cabello y vestuario se editan en el Taller.</p><div class="row"><button class="btn accent" data-act="open-taller">Abrir el Taller</button></div>`;
@@ -1050,11 +1070,177 @@ function propsOf(o) {
     <label class="btn wide filebtn">Subir hojas de modelo (hasta 3)<input type="file" id="sheetfile" accept="image/*" multiple hidden></label>`;
   if (o.type === "modelo") h += `<h3>Aspecto del modelo</h3><div class="pills">${pill("original", o.params?.look === "arcilla" ? "arcilla" : "original", "Sus colores y texturas", "model-look")}${pill("arcilla", o.params?.look === "arcilla" ? "arcilla" : "original", "Arcilla", "model-look")}</div>`;
   if (o.kind === "creature") h += `<div class="nums">${num("scale", "Escala", Math.round((o.scale?.[0] ?? 1) * 100), "%")}</div>`;
+  if (o.kind === "prop" && !["terreno", "edificio", "casa", "carretera", "banqueta", "agua", "cerca", "poste_luz", "pared", "losa"].includes(o.type)) {
+    const hands = store.v.objects.filter(x => x.kind === "figure");
+    if (hands.length) h += `<h3>Sostener con la mano</h3><p class="sub">Acerca el objeto a la mano en la pose que quieras y elige la mano: desde ahí la sigue cuando cambias la pose.</p>
+      <label class="sel"><span>Lo sostiene</span><select data-act="hold">${`<option value="">Nadie</option>` + hands.map(f => [["wrist_R", "mano derecha"], ["wrist_L", "mano izquierda"]].map(([e, l]) => `<option value="${f.id}|${e}"${o.hold?.obj === f.id && o.hold?.end === e ? " selected" : ""}>${esc(f.name)}: ${l}</option>`).join("")).join("")}</select></label>`;
+  }
   if (!isFig && o.type !== "humo" && o.kind !== "creature") h += `<h3>Textura</h3><div class="pills">${Object.entries(TEXTURES).map(([k, l]) => pill(k, o.tex || "lisa", l, "obj-tex")).join("")}</div>`;
   h += `<div class="row colorrow"><label class="sel"><span>${isFig ? "Color de la piel o del maniquí" : "Color (para estilos de color y para separar planos)"}</span><input type="color" data-act="obj-color" value="${o.color || "#bdb6ac"}"></label>${o.color ? `<button class="btn" data-act="obj-nocolor">Quitar color</button>` : ""}</div>`;
-  h += `<div class="row"><button class="btn" data-act="dup">Duplicar</button><button class="btn" data-act="fwd">Copiar a viñetas siguientes</button><button class="btn danger" data-act="del">Borrar</button></div></div>`;
+  h += `<div class="row"><button class="btn" data-act="dup">Duplicar</button><button class="btn" data-act="fwd">Copiar a viñetas siguientes</button>${o.type === "modelo" ? "" : `<button class="btn" data-act="share-sel">Compartir</button>`}<button class="btn danger" data-act="del">Borrar</button></div></div>`;
   return h;
 }
+
+// ---------------------------------------------------------------- Plantas, objetos propios y sostener (Fase 6, bloque 2)
+function plantPanel(o) {
+  const p = o.params;
+  return `<h3>Especie</h3><div class="pills">${Object.entries(SPECIES).map(([k, d]) => pill(k, p.especie, d.label, "plant-sp")).join("")}</div>
+    ${slider("p-alto", "Altura", p.alto, 20, 4000, 10, " cm", "plant")}${slider("p-grosor", "Grosor del tronco", p.grosor ?? 1, 0.2, 2.5, 0.05, "", "plant")}${slider("p-follaje", "Follaje (seco ↔ frondoso)", p.follaje ?? 0.8, 0, 1, 0.05, "", "plant")}
+    ${p.especie === "flores" || p.especie === "cactus" ? `<div class="row colorrow"><label class="sel"><span>Color de las flores</span><input type="color" data-act="plant-flor" value="${p.flor || "#d8425a"}"></label></div>` : ""}
+    <div class="row"><button class="btn" data-act="plant-seed">Otra planta de la misma especie</button></div>`;
+}
+function compoundPanel(o) {
+  const parts = o.params.parts || [], q = parts.find(x => x.id === ui.cpart);
+  let h = `<h3>Piezas (${parts.length})</h3><div class="olist">${parts.map(x => `<button class="oitem${x.id === ui.cpart ? " on" : ""}" data-act="cp-sel" data-val="${x.id}"><span><i class="swatch" style="background:${x.color}"></i>${SHAPES[x.shape]}</span><small>${Math.round(x.size[0] * 100)} × ${Math.round(x.size[1] * 100)} × ${Math.round(x.size[2] * 100)} cm${x.mirror ? " · en espejo" : ""}</small></button>`).join("")}</div>
+    <p class="pl">Agregar pieza</p><div class="pills">${Object.entries(SHAPES).map(([k, l]) => pill(k, "", l, "cp-add")).join("")}</div>`;
+  if (q) h += `<div class="card sub-card"><div class="pills">${Object.entries(SHAPES).map(([k, l]) => pill(k, q.shape, l, "cp-shape")).join("")}</div>
+      ${["Ancho", "Alto", "Fondo"].map((l, i) => slider("cp-size" + i, l, Math.round(q.size[i] * 100), 0.5, 400, 0.5, " cm", "cpart")).join("")}
+      ${["Izquierda ↔ derecha", "Altura", "Atrás ↔ adelante"].map((l, i) => slider("cp-pos" + i, l, Math.round(q.pos[i] * 100), i === 1 ? -50 : -300, 300, 0.5, " cm", "cpart")).join("")}
+      ${["Giro X", "Giro Y", "Giro Z"].map((l, i) => slider("cp-rot" + i, l, q.rot[i], -180, 180, 1, "°", "cpart")).join("")}
+      <div class="row colorrow"><label class="sel"><span>Color</span><input type="color" data-act="cp-color" value="${q.color}"></label></div>
+      <div class="pills">${Object.entries(TEXTURES).map(([k, l]) => pill(k, q.tex || "lisa", l, "cp-tex")).join("")}</div>
+      <div class="toggles">${toggle("mirror", "En espejo", "Repite la pieza del otro lado (izquierda y derecha)", !!q.mirror, "cp-mirror")}</div>
+      <div class="row"><button class="btn" data-act="cp-dup">Duplicar pieza</button><button class="btn danger" data-act="cp-del">Quitar pieza</button></div></div>`;
+  h += `<div class="row"><button class="btn accent" data-act="cp-save">Guardar en mis objetos</button></div>`;
+  return h;
+}
+function saveMyObject(o) {
+  const L = myObjects().filter(x => x.name !== o.name); L.push({ name: o.name, parts: clone(o.params.parts || []) });
+  if (!writeMyObjects(L)) toast("No cupo el objeto en este dispositivo."); syncProfile();
+}
+// Sostener: guarda dónde queda el objeto respecto a la muñeca en este momento
+function setHold(o, value) {
+  if (!o) return;
+  if (!value) { const g = world.get(o.id); if (g) { o.pos = g.position.toArray().map(x => round(x, 3)); const e = new THREE.Euler().setFromQuaternion(g.quaternion); o.rot = [e.x, e.y, e.z].map(x => round(x * RAD, 1)); } delete o.hold; return; }
+  const [fid, end] = value.split("|"), f = figs.get(fid), g = world.get(o.id); if (!f || !g) return;
+  const j = f.joints[end]; j.updateMatrixWorld(true); g.updateMatrixWorld(true);
+  // si el objeto está lejos de la mano, primero se lleva a la palma
+  const wp = j.getWorldPosition(new THREE.Vector3());
+  if (g.position.distanceTo(wp) > 0.35) { g.position.copy(wp); g.updateMatrixWorld(true); }
+  const local = new THREE.Matrix4().copy(j.matrixWorld).invert().multiply(new THREE.Matrix4().compose(g.position, g.quaternion, new THREE.Vector3(1, 1, 1)));
+  const p = new THREE.Vector3(), q = new THREE.Quaternion(); local.decompose(p, q, new THREE.Vector3());
+  o.hold = { obj: fid, end, off: p.toArray().map(x => round(x, 4)), q: q.toArray().map(x => round(x, 5)) };
+  toast("Listo: el objeto sigue a esa mano. Para soltarlo elige «Nadie».");
+}
+
+// ---------------------------------------------------------------- Compartir y publicar (Fase 6, bloque 3)
+const noModels = list => list.filter(o => o.type !== "modelo");
+function vinetaData(V) { V.objects = noModels(V.objects); delete V.ref; delete V.read; return V; }
+function scenarioData(V) {
+  const keep = ["background", "fog", "atmo", "wind", "windDir", "floor"], view = {};
+  for (const k of keep) if (V.view[k] !== undefined) view[k] = V.view[k];
+  return { objects: noModels(V.objects.filter(o => o.kind !== "figure")), lights: V.lights, view };
+}
+function shareSelected() {
+  const o = selObj(); if (!o) { toast("Elige algo en la viñeta para compartirlo."); return; }
+  if (o.kind === "figure") { const d = { name: o.name }; for (const k of CHAR_KEYS) if (o[k] !== undefined) d[k] = clone(o[k]); openPublish("personaje", o.name, d, o.remixOf); }
+  else if (o.kind === "creature") openPublish("criatura", o.name, { name: o.name, cparams: clone(o.cparams), cpose: clone(o.cpose || {}), color: o.color || null, scale: o.scale }, o.remixOf);
+  else if (o.type === "modelo") toast("Los modelos .glb importados no se comparten: pesan demasiado y pueden tener derechos de otros.");
+  else openPublish("objeto", o.name, { name: o.name, type: o.type, params: clone(o.params), tex: o.tex || null, color: o.color || null, rot: o.rot, scale: o.scale }, o.remixOf);
+}
+async function thumbNow() {
+  try {
+    const A = frameAspect(), w = A >= 1 ? 480 : Math.round(480 * A), h = A >= 1 ? Math.round(480 / A) : 480;
+    const { canvas } = await withExportScene(() => renderToBlob(renderer, composer, scene, exportCamera(), store.v.view, w, h, { noBlob: true }, [grid, ruler]));
+    return canvas.toDataURL("image/jpeg", 0.78);
+  } catch { return null; }
+}
+let pubWin = null;
+async function openPublish(kind, title, data, remixOf = null) {
+  pubWin ??= Object.assign(document.createElement("div"), { id: "pubwin", className: "modal" });
+  document.body.appendChild(pubWin);
+  const st = { thumb: await thumbNow(), msg: "", busy: false, link: "" };
+  const logged = cloud.configured() && cloud.user();
+  const draw = () => {
+    pubWin.innerHTML = `<div class="sheetbox" role="dialog" aria-modal="true" aria-label="Compartir">
+      <div class="row between"><h2>Compartir ${esc(PUB_KINDS[kind].toLowerCase().replace(/s$/, ""))}</h2><button class="btn" data-p="close">Cerrar</button></div>
+      ${st.thumb ? `<img class="thumbprev" src="${st.thumb}" alt="Miniatura: lo que se ve ahora en la cámara">` : ""}
+      <p class="sub">La miniatura es lo que se ve ahora en la cámara. ${remixOf ? "Es una mezcla: se publica con crédito a la original." : ""}</p>
+      <label class="fld"><span>Título</span><input class="text" id="p-title" maxlength="80" value="${esc(title)}"></label>
+      <label class="fld"><span>Descripción (opcional)</span><textarea class="text" id="p-desc" maxlength="600"></textarea></label>
+      <h3>Enlace sin cuenta</h3><p class="sub">La pieza viaja dentro del enlace; quien lo abra la agrega a su Arnés. No queda en la galería.</p>
+      <div class="row"><button class="btn" data-p="link">Crear enlace</button></div>
+      ${st.link ? `<div class="row"><input class="text" id="p-link" readonly value="${esc(st.link)}"><button class="btn" data-p="copy">Copiar</button></div>` : ""}
+      <h3>Publicar en la galería</h3>
+      ${logged ? `<label class="chk"><input type="checkbox" id="p-public" checked> Mostrar en la galería (si lo quitas, solo la ve quien tenga el enlace)</label>
+        <label class="chk"><input type="checkbox" id="p-remix"> Permitir que otros la mezclen y publiquen su versión (con tu crédito)</label>
+        <div class="row"><button class="btn accent" data-p="publish" ${st.busy ? "disabled" : ""}>${st.busy ? "Publicando…" : "Publicar"}</button></div>`
+        : `<p class="sub">${cloud.configured() ? "Entra a tu cuenta (Proyectos → Entrar a la nube) y crea tu perfil para publicar." : "La galería funciona en la versión de GitHub Pages."}</p>`}
+      <p class="hmsg" role="status">${esc(st.msg)}</p></div>`;
+  };
+  const title_ = () => pubWin.querySelector("#p-title").value.trim() || title;
+  pubWin.onclick = async e => {
+    if (e.target === pubWin) { pubWin.remove(); return; }
+    const b = e.target.closest("[data-p]"); if (!b) return;
+    const k = b.dataset.p;
+    if (k === "close") { pubWin.remove(); return; }
+    if (k === "copy") { try { await navigator.clipboard.writeText(st.link); st.msg = "Enlace copiado."; } catch { st.msg = "Mantén presionado el enlace para copiarlo."; } draw(); return; }
+    if (k === "link") {
+      st.link = await share.encodeItem({ kind, title: title_(), data });
+      st.msg = st.link.length > 60000 ? "El enlace es largo: compártelo por correo o WhatsApp; algunos chats lo cortan." : "Enlace listo."; draw(); return;
+    }
+    if (k === "publish") {
+      const vis = pubWin.querySelector("#p-public").checked ? "publico" : "enlace", remix = pubWin.querySelector("#p-remix").checked, desc = pubWin.querySelector("#p-desc").value, ttl = title_();
+      st.busy = true; draw();
+      try {
+        const me = await cloud.myPublic();
+        if (!me) { st.busy = false; st.msg = "Antes crea tu perfil público (nombre de usuario): Proyectos → Mi perfil."; draw(); return; }
+        const id = await cloud.publish({ kind, title: ttl, description: desc, data, thumb: st.thumb, visibility: vis, remix, remix_of: remixOf });
+        st.link = `${share.shareBase()}#pub=${id}`; st.msg = vis === "publico" ? "Publicado en la galería. Este es su enlace:" : "Publicado solo con enlace:";
+      } catch (err) { st.msg = err.message || "No se pudo publicar."; }
+      st.busy = false; draw();
+    }
+  };
+  draw();
+}
+// Usar en Arnés lo que llega de la galería o de un enlace
+async function importItem(pub, mode = "use") {
+  const { kind } = pub, d = clone(pub.data || {}), remixOf = mode === "remix" ? pub.id || null : null;
+  if (!store.project) openProject(blankProject());
+  const v = store.v, fresh = list => list.map(o => ({ ...clone(o), id: uid(o.kind === "figure" ? "f" : o.kind === "creature" ? "c" : "p") }));
+  if (kind === "estilo") {
+    if (d.type === "aprendido") { const L = learnedStyles(); const p = { ...d.profile, name: uniqueName(L, d.profile.name || pub.title), remixOf }; L.push(p); writeLearned(L); ui.learnedSel = L.length - 1; selectTab("luz", false); toast(`Estilo «${p.name}» agregado a tus estilos aprendidos (Luz → Render final).`); }
+    else { const L = savedStyles(); const nm = uniqueName(L, pub.title); L.push({ name: nm, view: d.view, remixOf }); writeStyles(L); Object.assign(v.view, clone(d.view)); applyBackground(); repaintAll(); store.commit(); selectTab("luz", false); toast(`Estilo «${nm}» guardado y aplicado a esta viñeta.`); }
+    return;
+  }
+  if (kind === "personaje") {
+    const c = { ...d, name: uniqueName(savedChars(), d.name || pub.title), remixOf }; const list = savedChars(); list.push(c); writeChars(list);
+    addFigure(); const f = store.v.objects.at(-1);
+    for (const k of CHAR_KEYS) { if (c[k] !== undefined) f[k] = clone(c[k]); else delete f[k]; }
+    for (const g of f.clothes || []) g.id = newGarment(g.type).id;
+    for (const a of f.accessories || []) a.id = newAccessory(a.type).id;
+    f.name = c.name; if (remixOf) f.remixOf = remixOf; delete f.charId;
+    rebuildObject(f); groundFigure(figs.get(f.id)); f.pose = M.readPose(figs.get(f.id), f.pose); store.commit(); select(f.id); selectTab("escena", false);
+    toast(`«${c.name}» quedó en tus personajes y en esta viñeta.`); return;
+  }
+  if (kind === "criatura") {
+    addCreature(d.cparams?.template, d.cparams); const o = store.v.objects.at(-1);
+    o.name = d.name || pub.title; o.cpose = d.cpose || {}; if (d.color) o.color = d.color; if (d.scale) o.scale = d.scale; if (remixOf) o.remixOf = remixOf;
+    rebuildObject(o); applyBackground(); store.commit(); renderPanel(); selectTab("escena", false); toast(`Criatura «${o.name}» en tu viñeta.`); return;
+  }
+  if (kind === "objeto") {
+    const t = controls.target;
+    const o = { id: uid("p"), kind: "prop", type: d.type, name: d.name || pub.title, pos: [round(t.x, 2), 0, round(t.z, 2)], rot: d.rot || [0, 0, 0], scale: d.scale || [1, 1, 1], params: d.params || {}, ...(d.tex ? { tex: d.tex } : {}), ...(d.color ? { color: d.color } : {}), ...(remixOf ? { remixOf } : {}) };
+    if (!ALL_PROPS()[o.type] && o.type !== "compuesto" && o.type !== "planta") { toast("Ese objeto necesita una versión más nueva de Arnés."); return; }
+    v.objects.push(o); buildObject(o); if (o.type === "compuesto") saveMyObject(o); store.commit(); select(o.id); selectTab("escena", false); toast(`«${o.name}» en tu viñeta${o.type === "compuesto" ? " y en tus objetos" : ""}.`); return;
+  }
+  if (kind === "escenario") {
+    const objs = fresh(d.objects || []); v.objects.push(...objs); for (const ob of objs) buildObject(ob);
+    if (d.lights?.length) v.lights = clone(d.lights).map(l => ({ ...l, id: uid("l") }));
+    Object.assign(v.view, d.view || {}); rebuildLights(); applyBackground(); store.commit(); renderPanel(); markDirty(3); selectTab("escena", false); toast(`Escenario «${pub.title}» agregado a esta viñeta.`); return;
+  }
+  if (kind === "vineta") {
+    storeCamera(); const V = { ...clone(d), id: uid("v"), name: pub.title }; V.objects = fresh(V.objects || []);
+    store.project.vinetas.splice(store.project.cur + 1, 0, V); store.project.cur++; store.commit(); rebuildScene(); selectTab("camara", false); toast(`Viñeta «${pub.title}» agregada después de la actual.`); return;
+  }
+  if (kind === "pagina") {
+    const ids = {}; const vins = (d.vinetas || []).map(x => { const nid = uid("v"); ids[x.id] = nid; return { ...x, id: nid, objects: fresh(x.objects || []) }; });
+    const pg = { ...clone(d.page), id: uid("pg") }; for (const pn of pg.panels || []) pn.v = ids[pn.v] || null;
+    openProject({ version: 2, name: pub.title, cur: 0, vinetas: vins.length ? vins : blankProject().vinetas, pages: [pg], curPage: 0 }, "pagina");
+    toast(`Página «${pub.title}» abierta como proyecto nuevo.`);
+  }
+}
+function uniqueName(list, base) { let nm = base, i = 2; while (list.some(x => x.name === nm)) nm = `${base} ${i++}`; return nm; }
 
 // ---------------------------------------------------------------- Criaturas
 async function creatureDraw(o) {
@@ -1070,9 +1256,9 @@ async function creatureDraw(o) {
   ui.crBusy = false; renderPanel();
 }
 const C_SLIDERS = [
-  ["Tamaño y cuerpo", [["length", "Largo total", 0.1, 60, 0.1, " m"], ["bodyLen", "Torso", 0.2, 3, 0.01], ["bodyH", "Alto del torso", 0.05, 1.2, 0.01], ["bodyW", "Ancho del torso", 0.05, 1.5, 0.01], ["belly", "Panza (plana ↔ redonda)", 0.4, 1.3, 0.01], ["bulk", "Masa en hombros y cadera", 0, 1.5, 0.01]]],
+  ["Tamaño y cuerpo", [["length", "Largo total", 0.1, 60, 0.1, " m"], ["bodyLen", "Torso", 0.2, 3, 0.01], ["bodyH", "Alto del torso", 0.05, 1.2, 0.01], ["bodyW", "Ancho del torso", 0.05, 1.5, 0.01], ["belly", "Panza (plana ↔ redonda)", 0.4, 1.3, 0.01], ["bulk", "Masa en hombros y cadera", 0, 1.5, 0.01], ["hump", "Joroba de los hombros", -0.5, 1.5, 0.01]]],
   ["Cuello, cabeza y cola", [["neckLen", "Cuello", 0, 1.2, 0.01], ["neckW", "Grosor del cuello", 0.2, 1.2, 0.01], ["neckAng", "Inclinación del cuello", -30, 90, 1, "°"], ["headLen", "Cabeza", 0.05, 0.8, 0.01], ["headW", "Ancho de la cabeza", 0.3, 1.6, 0.01], ["snout", "Hocico", 0, 1.5, 0.01], ["brow", "Cejas óseas", 0, 1.5, 0.01], ["teeth", "Dientes", 0, 1.5, 0.01], ["horns", "Cuernos", 0, 3, 1, ""], ["hornLen", "Largo de cuernos", 0.05, 1, 0.01], ["ears", "Orejas", 0, 2, 0.1], ["tailLen", "Cola", 0, 3, 0.01], ["tailW", "Grosor de la cola", 0.1, 1.6, 0.01]]],
-  ["Extremidades", [["legLen", "Largo de patas", 0.1, 1.5, 0.01], ["legW", "Grosor de patas", 0.05, 1, 0.01], ["sprawl", "Patas abiertas (de lado)", 0, 1, 0.01], ["footLen", "Pie", 0.03, 0.5, 0.01], ["claws", "Garras", 0, 6, 1, ""]]],
+  ["Extremidades", [["legLen", "Largo de patas", 0.1, 1.5, 0.01], ["legW", "Grosor de patas", 0.05, 1, 0.01], ["sprawl", "Patas abiertas (de lado)", 0, 1, 0.01], ["frontLeg", "Patas delanteras: largo", 0.5, 1.8, 0.01], ["frontLegW", "Patas delanteras: grosor", 0.5, 2, 0.01], ["footLen", "Pie", 0.03, 0.5, 0.01], ["claws", "Garras", 0, 6, 1, ""]]],
   ["Superficie", [["armorSize", "Tamaño de la coraza", 0, 1.5, 0.01], ["spikes", "Púas en el lomo", 0, 1.5, 0.01], ["folds", "Pliegues de piel", 0, 1.5, 0.01], ["seed", "Variación", 1, 99, 1, ""]]],
 ];
 function creaturePanel(o) {
@@ -1237,6 +1423,8 @@ function buildScene(sc) {
       addFigure(); const o = v.objects.at(-1); const fig0 = figs.get(o.id);
       o.name = p.nombre || `Personaje ${i + 1}`;
       const bt = BODY_TYPES[p.cuerpo]; if (bt) { Object.assign(o.params, bt.params); o.bodyType = p.cuerpo; }
+      // con cuerpo realista, el tipo de cuerpo leído se aplica como su ficha del Taller (antes solo cambiaba al maniquí)
+      if (o.human && T.PRESETS[p.cuerpo]) T.applyPreset(o, p.cuerpo, { newGarment, newAccessory });
       o.tex = "piel"; o.color = SKIN_KEYS[p.piel]?.hex || "#c99a76";
       o.clothes = p.ropa.map(g => { const gg = newGarment(g.tipo); if (g.color) gg.color = g.color; return gg; });
       o.face.expr = clone(M.EXPRESSIONS[p.expresion] || M.EXPRESSIONS.neutral); o.face.mode = "realista"; o.face.guides = false;
@@ -1404,7 +1592,7 @@ function panelDibujo(v) {
   h += `<label class="btn wide filebtn">${v.ref ? "Cambiar dibujo de la viñeta" : "Subir dibujo de la viñeta"}<input type="file" id="vinfile" accept="image/*" hidden></label>`;
   if (v.read?.descripcion) h += `<p class="sub">${esc(v.read.descripcion)}</p>`;
   if (v.ref) h += `<button class="btn wide" data-act="trace-open">Calcar la pose sobre el dibujo (sin IA)</button><p class="sub">Elige un personaje y arrastra sus puntos (cabeza, manos, pies…) sobre tu dibujo; la pose se ajusta sola.</p>`;
-  if (v.ref) h += `<button class="btn wide" data-act="vin-read" ${ui.readBusy ? "disabled" : ""}>${ui.readBusy ? "La IA está leyendo el dibujo…" : sc ? "Volver a leer el dibujo" : "Leer el dibujo con Gemini"}</button>`;
+  if (v.ref) h += `<button class="btn wide" data-act="vin-read" ${ui.readBusy ? "disabled" : ""}>${ui.readBusy ? "La IA está leyendo el dibujo…" : sc ? "Volver a leer el dibujo" : "Leer el dibujo con IA"}</button>`;
   if (sc) {
     h += `<div class="card calrep"><p class="sub"><strong>Revisa antes de armar.</strong></p>${sceneSummary(sc).map(l => `<p class="sub">${esc(l)}</p>`).join("")}`;
     sc.personajes.forEach((p, i) => {
@@ -1855,7 +2043,8 @@ function panelLuz() {
   h += `<h3>Estilos de artista</h3><div class="olist">${[...BASE_STYLES, ...mine].map((st, i) => `<button class="oitem" data-act="style-apply" data-val="${i}"><span>${esc(st.name)}</span><small>${MODES[st.view.mode] || ""}${st.base ? " · de base" : " · tuyo"}</small></button>`).join("")}</div>
   ${mine.length ? `<div class="pills"><span class="pl">Borrar</span>${mine.map((st, i) => `<button class="pill" data-act="style-del" data-val="${i}">${esc(st.name)} ×</button>`).join("")}</div>` : ""}
   <div class="row"><input class="text" id="stylename" placeholder="Nombre del estilo" aria-label="Nombre del estilo"><button class="btn" data-act="style-save">Guardar este estilo</button></div>
-  <p class="sub">Tus estilos viajan con tu cuenta. Puedes tener varios y aplicarlos a cualquier viñeta.</p>`;
+  <p class="sub">Tus estilos viajan con tu cuenta. Puedes tener varios y aplicarlos a cualquier viñeta.</p>
+  <div class="row"><button class="btn" data-act="share-style" data-val="vista">Compartir el estilo de esta viñeta</button></div>`;
   const ai = aiConf(), ref = refImage();
   h += `<h3>Render final</h3><p class="sub">El render de trazos dibuja la viñeta con trazos sueltos de plumilla que siguen la forma, se afinan en las puntas y se cruzan en la sombra. Tarda unos segundos.</p>
   ${(() => { const st = myStrokes(); return `<div class="card"><p class="sub"><strong>Tus trazos</strong> · ${st.length ? `${st.length} trazos tuyos guardados` : "todavía no hay"}. Sube una foto de una hoja con trazos sueltos (rayados, líneas, tus criaturas) y el render usará la forma de tu mano.</p>
@@ -1868,7 +2057,7 @@ function panelLuz() {
       <div class="pills"><span class="pl">Tono</span>${pill("pluma", sel.engine || "pluma", "Rayado de pluma", "ls-engine")}${pill("grabado", sel.engine || "pluma", "Grabado debajo", "ls-engine")}</div>
       <div class="pills"><span class="pl">Rayado</span>${pill("fijo", sel.follow ? "forma" : "fijo", "En un ángulo", "ls-follow")}${pill("forma", sel.follow ? "forma" : "fijo", "Sigue la forma", "ls-follow")}</div>
       ${STYLE_PARAMS.map(([k, l, a, b, st]) => slider("ls-" + k, l, +(getParam(sel, k) ?? a), a, b, st, "", "ls-num").replace(`data-key="ls-${k}"`, `data-key="${k}"`)).join("")}
-      <div class="row"><button class="btn" data-act="ls-dup">Guardar como versión nueva</button></div>
+      <div class="row"><button class="btn" data-act="ls-dup">Guardar como versión nueva</button><button class="btn" data-act="share-style" data-val="aprendido">Compartir este estilo</button></div>
       ${L.length > 1 ? `<p class="sub">Mezclar con otro estilo (la mezcla se guarda como estilo nuevo):</p><div class="pills">${L.map((x, i) => i === (ui.learnedSel ?? 0) ? "" : pill(String(i), String(ui.mixWith ?? ""), x.name, "ls-mixwith")).join("")}</div>
         ${ui.mixWith !== undefined ? slider("ls-mixt", "Cuánto del otro", ui.mixT ?? 0.5, 0, 1, 0.05, "", "ls-mixt") + `<button class="btn" data-act="ls-mix">Mezclar</button>` : ""}` : ""}
     </details>` : ""}
@@ -1900,6 +2089,9 @@ function panelLuz() {
   if (v.mode === "manga") h += slider("dot", "Tamaño de la trama", v.dot || 7, 3, 16, 1, " px", "view-r");
   h += `<div class="toggles">${toggle("outline", artist ? "Línea interior" : "Contorno", artist ? "Pliegues y cambios de plano; la silueta siempre se entinta" : "Silueta y bordes marcados", v.outline)}</div>`;
   if (v.outline) h += slider("thick", "Grosor del contorno", v.thick, 0.5, 4, 0.25, " px", "view-r");
+  h += `<h3>Atmósfera</h3><p class="sub">Luz, cielo, niebla y partículas juntas. Cambia las luces de esta viñeta; después ajusta todo a mano.</p><div class="pills">${Object.entries(ATMOS).map(([k, a]) => pill(k, v.atmo || "ninguna", a.label, "atmo")).join("")}</div>
+  ${ATMOS[v.atmo]?.particles ? slider("atmoAmt", "Cantidad de partículas", v.atmoAmt ?? 0.6, 0, 1, 0.05, "", "atmo-r") : ""}
+  ${v.fogColor ? `<div class="row colorrow"><label class="sel"><span>Color del cielo y la niebla</span><input type="color" data-act="fog-color" value="${v.fogColor}"></label></div>` : ""}`;
   h += `<h3>Fondo y atmósfera</h3><div class="pills">${pill("papel", v.background, "Papel", "bg")}${pill("oscuro", v.background, "Oscuro", "bg")}</div>
   ${slider("fog", "Niebla o humo (separa los planos)", v.fog || 0, 0, 1, 0.05, "", "fog")}
   <h3>Viento</h3><p class="sub">Mueve capas, faldones y faldas.</p>
@@ -1952,6 +2144,7 @@ panel.addEventListener("click", e => {
   const act = b.dataset.act, val = b.dataset.val;
   if (/^(pg|pn|bl)-/.test(act)) { pageEd.onClick(act, val); return; }
   if (/^t-/.test(act)) { tallerClick(act, val, b); return; }
+  if (act === "share-sel") { shareSelected(); return; }
   const o = selObj(), v = store.v;
   switch (act) {
     case "open-taller": selectTab("taller", false); break;
@@ -1970,6 +2163,23 @@ panel.addEventListener("click", e => {
     case "c-joint": ui.cjoint = val; renderPanel(); break;
     case "c-draw": creatureDraw(o); break;
     case "add": addProp(val); break;
+    case "add-plant": { addProp("planta"); const p2 = selObj(); p2.params = { ...p2.params, especie: val, alto: SPECIES[val].alto, grosor: SPECIES[val].grosor, follaje: SPECIES[val].follaje }; p2.name = SPECIES[val].label.replace(/ \(.*\)$/, ""); rebuildObject(p2); store.commit(); renderPanel(); break; }
+    case "plant-sp": { o.params.especie = val; Object.assign(o.params, { alto: SPECIES[val].alto, grosor: SPECIES[val].grosor, follaje: SPECIES[val].follaje }); rebuildObject(o); store.commit(); renderPanel(); markDirty(3); break; }
+    case "plant-seed": { o.params.semilla = 1 + Math.floor(Math.random() * 998); rebuildObject(o); store.commit(); renderPanel(); markDirty(3); break; }
+    case "obj-new": case "obj-preset": {
+      addProp("compuesto"); const c = selObj(); const pr = OBJECT_PRESETS[val];
+      c.params = { parts: pr ? pr.parts() : [newPart("caja")] }; c.name = pr ? pr.label : "Objeto propio"; ui.cpart = c.params.parts[0]?.id;
+      rebuildObject(c); store.commit(); renderPanel(); markDirty(3); break;
+    }
+    case "myobj-add": { const m = myObjects()[+val]; if (!m) break; addProp("compuesto"); const c = selObj(); c.params = { parts: clone(m.parts).map(q => ({ ...q, id: uid("q") })) }; c.name = m.name; rebuildObject(c); store.commit(); renderPanel(); markDirty(3); break; }
+    case "myobj-del": { const L = myObjects(); const [x] = L.splice(+val, 1); writeMyObjects(L); syncProfile(); renderPanel(); if (x) toast(`Se borró «${x.name}» de tus objetos.`); break; }
+    case "cp-sel": ui.cpart = ui.cpart === val ? null : val; renderPanel(); break;
+    case "cp-add": { const q = newPart(val); o.params.parts.push(q); ui.cpart = q.id; rebuildObject(o); store.commit(); renderPanel(); markDirty(3); break; }
+    case "cp-shape": case "cp-tex": { const q = o.params.parts.find(x => x.id === ui.cpart); if (q) { q[act === "cp-shape" ? "shape" : "tex"] = val; rebuildObject(o); store.commit(); renderPanel(); markDirty(3); } break; }
+    case "cp-dup": { const q = o.params.parts.find(x => x.id === ui.cpart); if (q) { const c = { ...clone(q), id: uid("q") }; c.pos[0] += 0.1; o.params.parts.push(c); ui.cpart = c.id; rebuildObject(o); store.commit(); renderPanel(); markDirty(3); } break; }
+    case "cp-del": { o.params.parts = o.params.parts.filter(x => x.id !== ui.cpart); ui.cpart = null; rebuildObject(o); store.commit(); renderPanel(); markDirty(3); break; }
+    case "cp-save": { saveMyObject(o); renderPanel(); toast(`«${o.name}» guardado en tus objetos (Agregar → Objetos propios).`); break; }
+    case "atmo": { const lights2 = applyAtmo(v.view, val); if (lights2) v.lights = lights2; rebuildLights(); applyBackground(); repaintAll(); store.commit(); renderPanel(); markDirty(3); toast(`Atmósfera: ${ATMOS[val].label}. Ajusta niebla, color y partículas abajo.`); break; }
     case "sel": select(val); if (ui.tab === "pose") renderPanel(); break;
     case "sel-light": select(val); break;
     case "dup": duplicateSelected(); break;
@@ -2021,6 +2231,7 @@ panel.addEventListener("click", e => {
       const sc = SCENARIOS[val]; const objs = sc.build();
       v.objects.push(...objs); for (const ob of objs) buildObject(ob);
       if (sc.preset) applyPreset(sc.preset);
+      if (sc.atmo) { const l2 = applyAtmo(v.view, sc.atmo); if (l2) v.lights = l2; rebuildLights(); }
       applyBackground(); store.commit(); renderPanel(); markDirty(3); toast(`Escenario agregado: ${sc.label}.`); break;
     }
     case "import-glb": $("#glbfile").click(); break;
@@ -2062,7 +2273,7 @@ panel.addEventListener("click", e => {
     case "char-add": {
       const c = savedChars()[+val]; if (!c) break;
       addFigure(); const f = store.v.objects.at(-1);
-      for (const k of CHAR_KEYS) if (c[k] !== undefined) f[k] = clone(c[k]);
+      for (const k of CHAR_KEYS) { if (c[k] !== undefined) f[k] = clone(c[k]); else delete f[k]; }
       for (const g of f.clothes || []) g.id = newGarment(g.type).id;
       for (const a of f.accessories || []) a.id = newAccessory(a.type).id;
       f.name = c.name; rebuildObject(f); store.commit(); renderPanel(); markDirty(3); break;
@@ -2075,7 +2286,7 @@ panel.addEventListener("click", e => {
     case "drill-start": startDrill(o); break;
     case "clothq": v.view.clothQ = val; rebuildScene(); store.commit(); renderPanel(); markDirty(3); break;
     case "terrain": { o.params.tipo = val; rebuildObject(o); applyBackground(); store.commit(); renderPanel(); markDirty(); break; }
-    case "obj-nocolor": { delete o.color; if (o.kind === "creature") setCreatureStyle(world.get(o.id), store.v.view.mode !== "clay", null); else paint(world.get(o.id), null, true, o.tex); store.commit(); renderPanel(); markDirty(); break; }
+    case "obj-nocolor": { delete o.color; if (o.kind === "figure" && o.human) { applyChar(o); store.commit(); renderPanel(); break; } if (o.kind === "creature") setCreatureStyle(world.get(o.id), store.v.view.mode !== "clay", null); else paint(world.get(o.id), null, true, o.tex); store.commit(); renderPanel(); markDirty(); break; }
     case "light-nocolor": { const l = selLight(); delete l.color; rebuildLights(); attachGizmo(); store.commit(); renderPanel(); markDirty(); break; }
     case "gobo": { const l = selLight(); l.gobo = val; if (val !== "ninguno") l.shadow = true; rebuildLights(); attachGizmo(); store.commit(); renderPanel(); markDirty(); break; }
     case "aspect": v.camera.aspect = val; layoutFrame(); store.commit(); renderPanel(); markDirty(); break;
@@ -2109,6 +2320,13 @@ panel.addEventListener("click", e => {
     case "ls-mix": { const L = learnedStyles(), a = L[ui.learnedSel ?? 0], b = L[ui.mixWith]; if (a && b) { const m = mixStyles(a, b, ui.mixT ?? 0.5); L.push(m); writeLearned(L); ui.learnedSel = L.length - 1; ui.mixWith = undefined; renderPanel(); toast(`Mezcla «${m.name}» guardada.`); } break; }
     case "learned-del": { const L = learnedStyles(); const [st] = L.splice(ui.learnedSel ?? 0, 1); writeLearned(L); ui.learnedSel = 0; renderPanel(); if (st) toast(`Se borró el estilo «${st.name}».`); break; }
     case "final-ai": finalAI(); break;
+    case "share-v": { const V = clone(v), name = v.name; if (val === "escenario") openPublish("escenario", `Escenario de ${name}`, scenarioData(V)); else openPublish("vineta", name, vinetaData(V)); break; }
+    case "share-style": {
+      if (val === "aprendido") { const st = learnedStyles()[ui.learnedSel ?? 0]; if (st) openPublish("estilo", st.name, { type: "aprendido", profile: clone(st) }, st.remixOf); }
+      else { const view = {}; for (const k of STYLE_KEYS) if (v.view[k] !== undefined) view[k] = clone(v.view[k]); openPublish("estilo", `Estilo de ${v.name}`, { type: "vista", view }); }
+      break;
+    }
+    case "share-page": { const pg = pageEd.page(); if (pg) openPublish("pagina", pg.name || "Página", { page: clone(pg), vinetas: store.project.vinetas.filter(x => pg.panels.some(p => p.v === x.id)).map(x => vinetaData(clone(x))) }); break; }
     case "ai-open": openAiWindow(() => renderPanel()); break;
     case "ai-forget": writeAi({ model: aiConf().model }); renderPanel(); toast("Se quitó la clave de este dispositivo."); break;
     case "model-look": { const o = selObj(); if (o) { o.params.look = val; rebuildObject(o); store.commit(); renderPanel(); markDirty(3); } break; }
@@ -2133,6 +2351,9 @@ panel.addEventListener("input", e => {
   const o = selObj();
   if (out && el.type === "range") out.textContent = fmt(val, +el.step) + (out.textContent.match(/[^\d.\-]+$/)?.[0] || "");
   if (act === "creature") { o.cparams[key.slice(2)] = val; creatureRebuild(o); return; }
+  if (act === "cpart") { const q = o.params.parts.find(x => x.id === ui.cpart); if (q) { const [f, i] = [key.slice(3, -1), +key.slice(-1)]; q[f][i] = f === "rot" ? val : val / 100; creatureRebuild(o); } return; }
+  if (act === "plant") { o.params[key.slice(2)] = val; creatureRebuild(o); return; }
+  if (act === "atmo-r") { store.v.view[key] = val; applyBackground(); markDirty(); return; }
   if (act === "cjoint") { const j = ui.cjoint, i = +key.slice(2); o.cpose = o.cpose || {}; o.cpose[j] = o.cpose[j] || [0, 0, 0]; o.cpose[j][i] = val; applyCreaturePose(world.get(o.id), o.cpose); markDirty(); return; }
   if (act === "joint-rot") {
     const j = el.dataset.joint, i = +el.dataset.ax, refs = PSEUDO[j]?.joints || [j];
@@ -2170,7 +2391,12 @@ panel.addEventListener("change", e => {
   if (act === "ls-col") { const L = learnedStyles(), st = L[ui.learnedSel ?? 0]; if (st) { st[el.dataset.key] = el.value; writeLearned(L); } return; }
   if (el.id === "glbfile") { importGlb(el.files[0]); el.value = ""; return; }
   if (el.id === "crside" || el.id === "crfront") { const f = el.files[0]; el.value = ""; if (f) { ui[el.id === "crside" ? "crSide" : "crFront"] = f; renderPanel(); } return; }
-  if (act === "creature" || act === "cjoint") { store.commit(); return; }
+  if (act === "creature" || act === "cjoint" || act === "cpart" || act === "plant" || act === "atmo-r") { store.commit(); return; }
+  if (act === "cp-color") { const o2 = selObj(), q = o2?.params.parts?.find(x => x.id === ui.cpart); if (q) { q.color = el.value; rebuildObject(o2); store.commit(); renderPanel(); markDirty(3); } return; }
+  if (act === "cp-mirror") { const o2 = selObj(), q = o2?.params.parts?.find(x => x.id === ui.cpart); if (q) { q.mirror = el.checked; rebuildObject(o2); store.commit(); markDirty(3); } return; }
+  if (act === "plant-flor") { const o2 = selObj(); o2.params.flor = el.value; rebuildObject(o2); store.commit(); markDirty(3); return; }
+  if (act === "fog-color") { store.v.view.fogColor = el.value; applyBackground(); store.commit(); markDirty(); return; }
+  if (act === "hold") { const o2 = selObj(); setHold(o2, el.value); store.commit(); markDirty(3); return; }
   if (act === "c-flag") { const o2 = selObj(); o2.cparams[key] = el.checked; o2.cpose = {}; creatureRebuild(o2, true); store.commit(); return; }
   if (el.id === "calfile") { const f = el.files[0]; el.value = ""; if (f) calibrate(f); return; }
   if (el.dataset.act === "ui-t") { ui[el.dataset.key] = el.checked; return; }
@@ -2193,6 +2419,7 @@ panel.addEventListener("change", e => {
   const o = selObj(), v = store.v;
   if (pageEd.onChangeEl(act, el)) return;
   if (act === "obj-color" && o.kind === "creature") { o.color = el.value; setCreatureStyle(world.get(o.id), store.v.view.mode !== "clay", o.color); store.commit(); renderPanel(); markDirty(); return; }
+  if (act === "obj-color" && o.kind === "figure" && o.human) { o.color = el.value; applyChar(o); store.commit(); renderPanel(); return; }
   if (act === "obj-color") { o.color = el.value; paint(world.get(o.id), o.color, store.v.view.mode !== "clay", o.tex); if (store.v.view.mode === "clay") toast("El color se ve en los estilos Color, Cel, Noir, Manga y Valores."); store.commit(); renderPanel(); markDirty(); return; }
   if (act === "garment-color" || act === "garment" || act === "garment-t") {
     const g = o.clothes.find(x => x.id === ui.garment); if (!g) return;
@@ -2231,7 +2458,7 @@ panel.addEventListener("change", e => {
     if (key === "px" || key === "py" || key === "pz") { o.pos["xyz".indexOf(key[1])] = val / 100; g.position.fromArray(o.pos); if (ruler.visible) ruler.position.fromArray(o.pos); }
     else if (key === "ry" && o.kind === "figure") { o.rotY = val; g.rotation.y = val * DEG; buildRuler(); }
     else if (key[0] === "r") { o.rot["xyz".indexOf(key[1])] = val; g.rotation.set(...o.rot.map(d => d * DEG)); }
-    else if (key === "scale") { const s = Math.max(1, val) / 100; o.scale = [s, s, s]; g.scale.setScalar(s); }
+    else if (key === "scale") { const s = Math.max(1, val) / 100; o.scale = [s, s, s]; g.scale.setScalar(s); applyBackground(); rebuildLights(); }
     else if (key.startsWith("param:")) { o.params[key.slice(6)] = Math.max(1, val); rebuildObject(o); }
     store.commit(); markDirty();
   }
@@ -2277,7 +2504,7 @@ let profTimer = 0;
 function syncProfile() {
   if (!cloud.user()) return;
   clearTimeout(profTimer);
-  profTimer = setTimeout(() => cloud.pushProfile({ expr: savedExpr(), poses: savedPoses(), chars: savedChars(), styles: savedStyles(), strokes: myStrokes(), learned: learnedStyles() }).catch(() => {}), 1500);
+  profTimer = setTimeout(() => cloud.pushProfile({ expr: savedExpr(), poses: savedPoses(), chars: savedChars(), styles: savedStyles(), strokes: myStrokes(), learned: learnedStyles(), objects: myObjects() }).catch(() => {}), 1500);
 }
 async function mergeProfile() {
   if (!cloud.user()) return;
@@ -2290,7 +2517,8 @@ async function mergeProfile() {
     localStorage.setItem("arnes-styles", JSON.stringify(union(savedStyles(), d.styles)));
     if (Array.isArray(d.strokes) && !myStrokes().length) localStorage.setItem("arnes-strokes", JSON.stringify(d.strokes.slice(0, 96)));
     if (Array.isArray(d.learned)) { const L = learnedStyles(), names = new Set(L.map(x => x.name)); localStorage.setItem("arnes-learned", JSON.stringify([...L, ...d.learned.filter(x => !names.has(x.name))])); }
-    await cloud.pushProfile({ expr: savedExpr(), poses: savedPoses(), chars: savedChars(), styles: savedStyles(), strokes: myStrokes(), learned: learnedStyles() });
+    if (Array.isArray(d.objects)) writeMyObjects(union(myObjects(), d.objects));
+    await cloud.pushProfile({ expr: savedExpr(), poses: savedPoses(), chars: savedChars(), styles: savedStyles(), strokes: myStrokes(), learned: learnedStyles(), objects: myObjects() });
   } catch {}
 }
 function savePose(name, o) {
@@ -2304,7 +2532,7 @@ function savePose(name, o) {
 const pageEd = createPageEditor({
   store, renderer, composer, toast, renderPanel,
   onChange: () => store.commit(),
-  editVineta: id => { storeCamera(); store.project.cur = store.project.vinetas.findIndex(v => v.id === id); ui.sel = null; store.commit(); rebuildScene(); selectTab("camara", false); },
+  editVineta: id => { const i = store.project.vinetas.findIndex(v => v.id === id); if (i < 0) { toast("Esa viñeta ya no existe. Asigna otra al recuadro."); return; } storeCamera(); store.project.cur = i; ui.sel = null; store.commit(); rebuildScene(); selectTab("camara", false); },
   newVinetaFor: () => { storeCamera(); const c = clone(store.v); c.id = uid("v"); c.name = `Viñeta ${store.project.vinetas.length + 1}`; store.project.vinetas.push(c); return c; },
   openExport: () => dlg.showModal(),
 });
@@ -2573,13 +2801,22 @@ async function start(hot = {}) {
     try { const p = await share.decode(location.hash.slice(5)); openViewer(p); return; }
     catch { toast("Ese enlace está incompleto o dañado. Pide que te lo vuelvan a enviar."); }
   }
-  let note = "";
+  let note = "", go = null;
   if (cloud.configured()) {
-    try { if (await cloud.consumeOAuth()) { mergeProfile(); toast("Entraste a tu cuenta."); } }
+    try { const u = await cloud.consumeOAuth(); if (u) { mergeProfile(); if (u.recovery) go = "newpass"; else toast("Entraste a tu cuenta."); } }
     catch (e) { note = e.message; }
   }
   await store.list(); // migra el guardado de versiones anteriores
-  home.show(note);
+  // enlaces: #pub=<id> (galería), #u=<usuario> (perfil), #pieza=<…> (pieza sin cuenta)
+  const hp = new URLSearchParams(location.hash.slice(1));
+  if (!go && hp.get("pub")) go = { pub: hp.get("pub") };
+  else if (!go && hp.get("u")) go = { user: hp.get("u") };
+  else if (!go && hp.get("pieza")) {
+    try { const item = await share.decodeItem(hp.get("pieza")); history.replaceState(null, "", location.pathname); await importItem({ ...item, id: null }, "use"); document.body.classList.add("ready"); return; }
+    catch { note = "Ese enlace está incompleto o dañado. Pide que te lo vuelvan a enviar."; }
+  }
+  if (go && typeof go === "object") history.replaceState(null, "", location.pathname);
+  home.show(note, go);
   document.body.classList.add("ready");
 }
 // Vista de solo lectura (enlace compartido): nada se guarda hasta que el visitante guarda una copia
@@ -2622,6 +2859,7 @@ const home = createHome({
   makeExample: () => buildExample(),
   makeBlank: blankProject,
   onLogin: () => mergeProfile(),
+  importItem: (pub, mode) => importItem(pub, mode),
 });
 mergeProfile();
 window.__arnes.home = home;

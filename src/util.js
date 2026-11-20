@@ -48,10 +48,12 @@ export async function saveFile(filename, data) {
 
 // Color por objeto: material de arcilla teñido (uno por color)
 const colorCache = new Map();
-export function colorMat(hex) {
-  if (!colorCache.has(hex)) colorCache.set(hex, new THREE.MeshStandardMaterial({ color: new THREE.Color(hex), roughness: 0.82, metalness: 0 }));
-  return colorCache.get(hex);
+export function colorMat(hex, side = THREE.FrontSide) {
+  const key = hex + "|" + side;
+  if (!colorCache.has(key)) colorCache.set(key, new THREE.MeshStandardMaterial({ color: new THREE.Color(hex), roughness: 0.82, metalness: 0, side }));
+  return colorCache.get(key);
 }
+const clayDouble = clay.clone(); clayDouble.side = THREE.DoubleSide;
 // Texturas de superficie: dibujan detalle en el valor (vetas, juntas, hojas, grietas) para que cada
 // estilo lo interprete: el grabado lo convierte en rayado, el color dinámico en manchas planas.
 export const TEXTURES = { lisa: "Lisa", madera: "Madera", ladrillo: "Ladrillo", follaje: "Follaje", piedra: "Piedra", tejido: "Tela o tejido", metal: "Metal gastado" };
@@ -151,6 +153,13 @@ export function paint(root, hex, useColor = true, tex = null) {
     if (m.userData.origMat) { // modelo importado: su propio material salvo que pidan color, textura o arcilla
       const c = hex && useColor ? hex : null;
       m.material = t ? texturedMat(t === "piel" ? hex : c, t) : c ? colorMat(c) : m.userData.look === "arcilla" ? clay : m.userData.origMat;
+      return;
+    }
+    // piezas con su propio color y textura (objetos armados, plantas): el color del objeto, si hay, manda
+    if (m.userData.part) {
+      const P = m.userData.part, side = P.side === 2 ? THREE.DoubleSide : THREE.FrontSide, ph = hex || P.color || null;
+      const pt = t || (P.tex && P.tex !== "lisa" ? P.tex : null), c = ph && useColor ? ph : null;
+      m.material = pt ? texturedMat(pt === "piel" ? ph : c, pt, side) : c ? colorMat(c, side) : side === THREE.DoubleSide ? clayDouble : clay;
       return;
     }
     if (m.userData.baseMat === undefined) { if (m.material !== clay) return; m.userData.baseMat = clay; }

@@ -138,7 +138,7 @@ export function panelHtml(o, ui, H) {
     h += `<div class="row"><input class="text" id="tname" value="${esc(o.name)}" aria-label="Nombre"><button class="btn" data-act="t-rename">Renombrar</button></div>
       <div class="toggles">${H.toggle("localChar", "Solo en esta viñeta", "Los cambios del Taller no se copian a las otras viñetas (una herida, la ropa mojada)", !!o.localChar, "t-local")}</div>
       <p class="sub">${o.charId ? "Ficha enlazada: lo que cambies aquí se aplica a este personaje en todas las viñetas del proyecto." : "Esta ficha todavía no está enlazada."} La pose y la posición son de cada viñeta.</p>
-      <div class="row"><button class="btn accent" data-act="t-save">Guardar en mis personajes</button><button class="btn" data-act="t-dup">Duplicar como variante</button></div>`;
+      <div class="row"><button class="btn accent" data-act="t-save">Guardar en mis personajes</button><button class="btn" data-act="t-dup">Duplicar como variante</button><button class="btn" data-act="share-sel">Compartir o publicar</button></div>`;
   }
   return h;
 }

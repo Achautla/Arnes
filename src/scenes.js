@@ -7,6 +7,7 @@ import * as M from "./mannequin.js";
 import { buildProp } from "./props.js";
 import { buildLight } from "./lights.js";
 import { buildCreature, setCreatureStyle } from "./creature.js";
+import { atmoParticles } from "./atmos.js";
 import { DEG, paint } from "./util.js";
 import { humanReady, attachHuman, humanDims, loadHuman } from "./human.js";
 import { dressHuman, equipHuman, humanShellAcc } from "./humandress.js";
@@ -32,8 +33,11 @@ export function sceneSpan(objects = []) {
 }
 export function applyAtmosphere(scene, view, span = 1) {
   const dark = view.background === "oscuro";
-  const c = new THREE.Color(dark ? DARK : PAPER);
+  // con atmósfera, el cielo y la niebla toman su color (gris de lluvia, ocre de polvo, azul de noche…)
+  const c = new THREE.Color(view.fogColor && (view.fog || 0) > 0 ? view.fogColor : dark ? DARK : PAPER);
   scene.background = c;
+  for (const o of scene.children.filter(x => x.userData.atmo)) { scene.remove(o); o.geometry?.dispose(); o.material?.dispose(); }
+  const fx = atmoParticles(view, span); if (fx) scene.add(fx);
   const f = view.fog || 0;
   const near = (dark ? 10 : 14) * (1 - f * 0.9), far = (dark ? 30 : 42) * (1 - f * 0.8);
   scene.fog = new THREE.Fog(c, Math.max(0.5, near * span), Math.max(near * span + 2, far * span));
@@ -65,6 +69,18 @@ export function buildObject3D(o) {
   return { g, fig };
 }
 
+// Objetos sostenidos con la mano: siguen a la muñeca con el desfase guardado al tomarlos
+const _hm = new THREE.Matrix4(), _hs = new THREE.Vector3();
+export function applyHolds(objects, figs, world, skipId = null) {
+  for (const ob of objects) {
+    const h = ob.hold; if (!h || ob.id === skipId) continue;
+    const f = figs.get(h.obj), j = f?.joints[h.end], g = world.get(ob.id); if (!j || !g) continue;
+    j.updateMatrixWorld(true);
+    _hm.compose(new THREE.Vector3(...h.off), new THREE.Quaternion(...h.q), _hs.set(1, 1, 1)).premultiply(j.matrixWorld);
+    _hm.decompose(g.position, g.quaternion, _hs);
+    g.scale.fromArray(ob.scale || [1, 1, 1]); g.updateMatrixWorld(true);
+  }
+}
 // Mirada y anclas (las mismas reglas que en el visor)
 export function applyConstraints(objects, figs, world, cameraPos) {
   for (const ob of objects) {
@@ -97,7 +113,7 @@ export function sceneFor(v, { lowEnd = true, mode } = {}) {
   for (const o of v.objects) {
     const { g, fig } = buildObject3D(o);
     if (o.kind === "creature") setCreatureStyle(g, useColor && (mode || view.mode) !== "grabado", o.color);
-    else if (o.color || o.tex) paint(g, o.color || null, useColor && (mode || view.mode) !== "grabado", o.tex);
+    else if (o.color || o.tex || g.userData.parts) paint(g, o.color || null, useColor && (mode || view.mode) !== "grabado", o.tex);
     if (g.userData.hidesFloor) hideFloor = true;
     content.add(g); world.set(o.id, g); if (fig) { fig.root.userData.isFigure = true; figs.set(o.id, fig); }
   }
@@ -120,6 +136,7 @@ export function sceneFor(v, { lowEnd = true, mode } = {}) {
   if (cam.roll) camera.rotateZ(cam.roll * DEG);
   camera.updateMatrixWorld(true);
   applyConstraints(v.objects, figs, world, camera.position);
+  applyHolds(v.objects, figs, world);
   // Ropa: se viste después de las anclas, con la tela ya asentada
   for (const o of v.objects) {
     const fig = figs.get(o.id);

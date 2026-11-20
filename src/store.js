@@ -60,7 +60,9 @@ export class Store {
   }
   deleteVineta() {
     if (this.project.vinetas.length < 2) return false;
-    this.project.vinetas.splice(this.project.cur, 1);
+    const [gone] = this.project.vinetas.splice(this.project.cur, 1);
+    // los recuadros de página que mostraban esta viñeta quedan vacíos (antes apuntaban a una viñeta que ya no existe)
+    for (const pg of this.project.pages || []) for (const pn of pg.panels || []) if (pn.v === gone.id) pn.v = null;
     this.project.cur = Math.max(0, this.project.cur - 1); return true;
   }
   // Copia un objeto a todas las viñetas siguientes (lo reemplaza si ya existe con el mismo id)

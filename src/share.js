@@ -24,3 +24,9 @@ export function shareBase() {
   return /github\.io$/.test(location.hostname) || location.hostname === "localhost" ? location.origin + location.pathname : PAGES_URL;
 }
 export async function makeLink(p) { const { code, models } = await encode(p); return { url: shareBase() + "#ver=" + code, models }; }
+// Enlace de una sola pieza (estilo, personaje, criatura, objeto, escenario…) sin cuenta: #pieza=…
+export async function encodeItem(item) {
+  const stream = new Blob([JSON.stringify(item)]).stream().pipeThrough(new CompressionStream("deflate-raw"));
+  return shareBase() + "#pieza=" + b64url(await new Response(stream).arrayBuffer());
+}
+export const decodeItem = decode;

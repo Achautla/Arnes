@@ -7,9 +7,9 @@ import { strands } from "./humandress.js";
 export const SURFACES = { piel: "Piel lisa", rugosa: "Piel rugosa", escamas: "Escamas", pelaje: "Pelaje", plumas: "Plumas", quitina: "Quitina" };
 export const ARMORS = { ninguna: "Sin coraza", bandas: "Bandas superpuestas", escudos: "Escudos en el lomo", placas: "Placas en todo el cuerpo" };
 // proporciones en unidades relativas; «length» es el largo total en metros
-const base = { length: 2, bodyLen: 1, bodyH: 0.3, bodyW: 0.34, neckLen: 0.25, neckW: 0.6, neckAng: 25, headLen: 0.3, headW: 0.7, snout: 0.5, tailLen: 0.6, tailW: 0.6, legPairs: 2, legLen: 0.45, legW: 0.35, sprawl: 0, footLen: 0.12, claws: 4, horns: 0, hornLen: 0.2, ears: 0, spikes: 0, armor: "ninguna", armorSize: 0.6, teeth: 0, bulk: 0.4, belly: 0.75, brow: 0.4, folds: 0.3, surface: "piel", upright: false, wings: false, fins: false, seed: 3, color: "#7d7262" };
+const base = { length: 2, bodyLen: 1, bodyH: 0.3, bodyW: 0.34, neckLen: 0.25, neckW: 0.6, neckAng: 25, headLen: 0.3, headW: 0.7, snout: 0.5, tailLen: 0.6, tailW: 0.6, legPairs: 2, legLen: 0.45, legW: 0.35, sprawl: 0, footLen: 0.12, claws: 4, horns: 0, hornLen: 0.2, ears: 0, spikes: 0, armor: "ninguna", armorSize: 0.6, teeth: 0, bulk: 0.4, hump: 0, frontLeg: 1, frontLegW: 1, belly: 0.75, brow: 0.4, folds: 0.3, surface: "piel", upright: false, wings: false, fins: false, seed: 3, color: "#7d7262" };
 export const TEMPLATES = {
-  reptil: { label: "Reptil y anfibio", ...base, teeth: 0.6, length: 3, bodyLen: 1, bodyH: 0.3, bodyW: 0.42, bulk: 0.7, brow: 0.7, neckLen: 0.14, neckW: 0.75, neckAng: 8, headLen: 0.36, headW: 0.62, snout: 0.75, tailLen: 1.3, tailW: 0.7, legLen: 0.34, legW: 0.5, sprawl: 0.7, footLen: 0.2, claws: 5, armor: "placas", armorSize: 0.7, folds: 0.7, surface: "rugosa", color: "#6c6a55" },
+  reptil: { label: "Reptil y anfibio", ...base, teeth: 0.6, length: 3, bodyLen: 1, bodyH: 0.3, bodyW: 0.42, bulk: 0.7, brow: 0.7, hump: 0.35, frontLegW: 1.15, neckLen: 0.14, neckW: 0.75, neckAng: 8, headLen: 0.36, headW: 0.62, snout: 0.75, tailLen: 1.3, tailW: 0.7, legLen: 0.34, legW: 0.5, sprawl: 0.7, footLen: 0.2, claws: 5, armor: "placas", armorSize: 0.7, folds: 0.7, surface: "rugosa", color: "#6c6a55" },
   cuadrupedo: { label: "Cuadrúpedo", ...base, teeth: 0.6, length: 2, bodyH: 0.34, neckLen: 0.35, neckAng: 35, legLen: 0.65, legW: 0.28, tailLen: 0.55, tailW: 0.35, surface: "pelaje", ears: 1, color: "#7a5a3c" },
   ave: { label: "Ave", ...base, length: 0.9, bodyLen: 0.55, bodyH: 0.4, bodyW: 0.4, neckLen: 0.45, neckW: 0.45, neckAng: 55, headLen: 0.22, snout: 0.4, tailLen: 0.35, tailW: 0.3, legPairs: 1, legLen: 0.55, legW: 0.18, claws: 3, wings: true, surface: "plumas", color: "#5b5047" },
   serpiente: { label: "Serpiente", ...base, length: 4, bodyLen: 2.4, bodyH: 0.09, bodyW: 0.1, neckLen: 0.05, neckW: 0.9, neckAng: 0, headLen: 0.14, headW: 1.25, snout: 0.4, tailLen: 1.6, tailW: 0.9, legPairs: 0, folds: 0.1, surface: "escamas", color: "#4e5a3a" },
@@ -61,7 +61,7 @@ function skeletonPlan(p) {
     const attachAt = p.upright ? (front ? chestP.clone().add(V(0, -p.bodyH * 0.1, 0)) : hipsP) : hipsP.clone().lerp(chestP, t);
     const parent = axial.reduce((b, a) => (a.p.distanceTo(attachAt) < b.p.distanceTo(attachAt) && !a.name.startsWith("cuello") && a.name !== "cabeza" ? a : b), axial[0]).name;
     const isArm = p.upright && front && !wingPair, isWing = wingPair;
-    const L = isWing ? p.bodyLen * 0.8 + p.neckLen * 0.5 : isArm ? p.legLen * 0.62 : p.legLen;
+    const L = isWing ? p.bodyLen * 0.8 + p.neckLen * 0.5 : isArm ? p.legLen * 0.62 * (p.frontLeg ?? 1) : p.legLen * (front ? p.frontLeg ?? 1 : 1);
     for (const [side, sx] of [["I", 1], ["D", -1]]) {
       const hip = attachAt.clone().add(V(sx * p.bodyW * 0.42, isWing ? p.bodyH * 0.3 : isArm ? -p.bodyH * 0.05 : -p.bodyH * 0.25, 0));
       const sp = isWing ? 1 : p.sprawl;
@@ -142,6 +142,11 @@ export function buildCreature(o) {
   for (let i = 0; i <= nR; i++) {
     const t = i / nR, s = lerpPath(axis, t);
     const [rx, ry] = R(t);
+    // línea del lomo: el arco medido en tu dibujo y la joroba de los hombros suben o bajan el centro del cuerpo
+    let lift = 0;
+    if (p.arch && t < neckEnd) { const u = t / neckEnd * (p.arch.length - 1), i0 = Math.floor(u), fr = u - i0; lift += (p.arch[i0] * (1 - fr) + (p.arch[Math.min(p.arch.length - 1, i0 + 1)] ?? 0) * fr) * p.bodyH * k * 0.5; }
+    if (p.hump) lift += p.hump * p.bodyH * k * 0.35 * Math.exp(-(((t - (bodyEnd - (bodyEnd - tailFrac) * 0.18)) / 0.08) ** 2));
+    if (lift) s.p.y += lift;
     const up = Math.abs(s.tan.y) > 0.95 ? V(0, 0, -1) : V(0, 1, 0);
     const bw = s.a === s.b ? [[bi(s.a), 1]] : [[bi(s.a), 1 - s.u], [bi(s.b), s.u]];
     // la parte de abajo del hocico va con la mandíbula
@@ -162,7 +167,7 @@ export function buildCreature(o) {
     for (let i = 0; i <= n; i++) {
       const t = i / n * 3, seg = Math.min(2, Math.floor(t)), u = t - seg;
       const c = pts[seg].clone().lerp(pts[seg + 1], u), tan = pts[seg + 1].clone().sub(pts[seg]).normalize();
-      const r = legW * (L.wing ? 0.45 : 1) * (1.3 - 0.62 * Math.min(1, t / 2.4)) * (1 + p.folds * 0.08 * Math.sin(t * 18) * Math.exp(-(((u - 0) / 0.25) ** 2)));
+      const r = legW * (L.wing ? 0.45 : 1) * (L.front && !L.wing ? p.frontLegW ?? 1 : 1) * (1.3 - 0.62 * Math.min(1, t / 2.4)) * (1 + p.folds * 0.08 * Math.sin(t * 18) * Math.exp(-(((u - 0) / 0.25) ** 2)));
       const bw = u < 0.2 && seg > 0 ? [[bi(names[seg - 1]), 0.5 - u * 2.5], [bi(names[seg]), 0.5 + u * 2.5]] : [[bi(names[seg]), 1]];
       const up = Math.abs(tan.y) > 0.9 ? V(0, 0, 1) : V(0, 1, 0);
       const r0 = ring(c, tan, up, r, r * (L.wing ? 0.35 : 0.95), 14, bw);
@@ -171,7 +176,7 @@ export function buildCreature(o) {
     }
     // masa muscular del hombro o de la cadera: lo que hace que se vea pesada
     if (p.bulk > 0 && !L.wing && p.legW > 0.2) {
-      const mus = new THREE.SphereGeometry(1, 16, 12), m = legW * (0.7 + p.bulk * 0.4);
+      const mus = new THREE.SphereGeometry(1, 16, 12), m = legW * (L.front ? p.frontLegW ?? 1 : 1) * (0.7 + p.bulk * 0.4);
       mus.scale(m * 0.75, m * 1.1, m * 1.3);
       const parentBone = list.indexOf(bonesBy[names[0]].parent);
       appendGeo(mus, pts[0].clone().lerp(pts[1], 0.12).add(V(-L.side * m * 0.45, m * 0.1, 0)), new THREE.Quaternion().setFromEuler(new THREE.Euler(L.front ? -0.25 : 0.25, 0, L.side * 0.2)), bi(names[0]), parentBone, 1);
@@ -246,12 +251,20 @@ export function buildCreature(o) {
         for (let row = 0; row < 2; row++) for (let j = 0; j < arc; j++) { const a = s0 + row * (arc + 1) + j, b = a + arc + 1; idx.push(a, a + 1, b, a + 1, b + 1, b); }
       }
       if (p.armor === "escudos" || p.armor === "placas") {
-        const rows = 2 + Math.round(p.armorSize * 2);
+        // placas óseas encimadas como tejas: filas alternadas, cada placa inclinada hacia atrás con su borde levantado
+        const rows = 3 + Math.round(p.armorSize * 4), span = p.armor === "placas" ? 2.4 : 1.5, odd = Math.round((i - 2) / step) % 2;
+        const segLen = step / nR * axisLen(axis), rad = Math.max(r.rx, r.ry);
         for (let rr = 0; rr < rows; rr++) {
-          const a = Math.PI / 2 + (rr - (rows - 1) / 2) * 0.32, c = Math.cos(a), s = Math.sin(a);
-          const sc = new THREE.ConeGeometry(Math.max(r.rx, r.ry) * 0.18 * (0.6 + p.armorSize), Math.max(r.rx, r.ry) * 0.16, 4); sc.scale(1, 1, 1.5);
-          const at = r.p.clone().addScaledVector(side, c * r.rx * 1.02).addScaledVector(u2, s * r.ry * 1.02), nrm = side.clone().multiplyScalar(c).addScaledVector(u2, s).normalize();
-          appendGeo(sc, at, new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), nrm), r.bw[0][0]);
+          const a = Math.PI / 2 + ((rr + (odd ? 0.5 : 0)) / rows - 0.5) * span, c = Math.cos(a), s = Math.sin(a);
+          if (s < -0.1) continue;
+          const pw = rad * span / rows * 1.15 * (0.85 + rnd() * 0.3), pl = segLen * (1.25 + p.armorSize * 0.35), pt = rad * 0.05 * (0.6 + p.armorSize);
+          const plate = new THREE.BoxGeometry(pw, pt, pl, 2, 1, 2), pp = plate.getAttribute("position");
+          for (let q = 0; q < pp.count; q++) { const x = pp.getX(q) / pw, z = pp.getZ(q) / pl; pp.setY(q, pp.getY(q) - (x * x) * pt * 2.5 + (z < 0 ? -z * pt * 1.6 : 0)); }
+          plate.computeVertexNormals();
+          const nrm = side.clone().multiplyScalar(c).addScaledVector(u2, s).normalize(), at = r.p.clone().addScaledVector(side, c * r.rx * 1.02).addScaledVector(u2, s * r.ry * 1.02);
+          const basis = new THREE.Matrix4().makeBasis(new THREE.Vector3().crossVectors(nrm, r.tan).normalize(), nrm, r.tan.clone().negate());
+          const quat = new THREE.Quaternion().setFromRotationMatrix(basis).multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.22, 0, 0)));
+          appendGeo(plate, at.addScaledVector(r.tan, -pl * 0.25), quat, r.bw[0][0], r.bw[1]?.[0] ?? -1, 0.68 + rnd() * 0.12);
         }
       }
       if (p.spikes > 0 && i % (step * 2) === 2 % (step * 2)) {
@@ -391,7 +404,18 @@ export async function creatureFromDrawing(side, front = null) {
   if (template === "reptil" || template === "cuadrupedo") out.legPairs = Math.max(2, out.legPairs);
   // perfil de grosor, de la punta de la cola al cuello: guarda la joroba, la panza y cómo se afila
   const ord = tailRight ? ths.slice().reverse() : ths.slice(), end = Math.round(W * (1 - headLen));
-  out.profile = Array.from({ length: 20 }, (_, i) => +(Math.max(0.04, ord[Math.min(end - 1, Math.round(i / 19 * (end - 1)))] / (bodyT * W))).toFixed(3));
+  const sample = (arr, i) => arr[Math.min(end - 1, Math.round(i / 19 * (end - 1)))];
+  out.profile = Array.from({ length: 20 }, (_, i) => +(Math.max(0.04, sample(ord, i) / (bodyT * W))).toFixed(3));
+  // línea del lomo: dónde queda el centro del cuerpo (sube en la joroba, baja en la cola)
+  const mids = smooth(Array.from(top, (t, i) => t < 0 ? NaN : (t + Math.min(bot[i], belly)) / 2).map((v, i, a) => isNaN(v) ? a[Math.max(0, i - 1)] || 0 : v));
+  const ordM = tailRight ? mids.slice().reverse() : mids, refM = [...ordM].slice(Math.round(end * 0.3), end).sort((a, b) => a - b)[Math.round((end * 0.7) / 2)] ?? ordM[0];
+  out.arch = Array.from({ length: 20 }, (_, i) => +Math.max(-1.5, Math.min(1.5, (refM - sample(ordM, i)) / (bodyT * W) * 2)).toFixed(3));
+  // patas: el ancho de cada una frente al cuerpo; si las de adelante son más gruesas, se nota
+  if (legRuns.length) {
+    const widths = legRuns.map(r => (r.b - r.a) / W), headward = r => tailRight ? -r.a : r.a, sorted = [...legRuns].sort((a, b) => headward(a) - headward(b));
+    out.legW = Math.max(T.legW, Math.min(0.9, (widths.reduce((a, b) => a + b, 0) / widths.length) / bodyT * 0.7));
+    if (sorted.length > 1) { const f = sorted.at(-1), b2 = sorted[0]; out.frontLegW = +Math.max(T.frontLegW ?? 1, Math.min(1.8, (f.b - f.a) / Math.max(1, b2.b - b2.a))).toFixed(2); out.frontLeg = +Math.max(0.8, Math.min(1.5, f.depth / Math.max(1, b2.depth))).toFixed(2); }
+  }
   return { params: out, report: { template, legsSeen: legRuns.length, tail: Math.round(tailLen * 100), head: tailRight ? "izquierda" : "derecha", height: Math.round(hl * 100) } };
 }
 export async function silhouette(file) {

@@ -13,7 +13,10 @@ export function gatherObstacles(groups, figsList, exclude) {
     g.updateMatrixWorld(true);
     g.traverse(m => {
       if (!m.isMesh || !m.visible || m.userData.noContact) return;
+      // follaje, agua y criaturas: su caja envolvente no es su forma (aplastaba a quien estuviera bajo un árbol)
+      if (m.isSkinnedMesh || m.userData.water || m.userData.part?.side === 2 || m.isPoints) return;
       const geo = m.geometry; if (!geo.boundingBox) geo.computeBoundingBox();
+      if (!isFinite(geo.boundingBox.min.x) || !isFinite(geo.boundingBox.max.y)) return;
       const s = geo.boundingBox.getSize(_v).multiply(m.getWorldScale(_a));
       if (Math.min(s.x, s.y, s.z) < 0.004 || Math.max(s.x, s.y, s.z) < 0.03) return; // láminas y piezas diminutas no cuentan
       const mat = m.matrixWorld.clone(), inv = mat.clone().invert();

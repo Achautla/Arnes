@@ -2,6 +2,16 @@
 
 Storyboard 3D para cómic: posar personajes, colocar cámaras y luces, y obtener un semirender (volumen, sombras y valores) para dibujar a lápiz.
 
+## Fase 6 · bloques 2 y 3, y bugs corregidos (20-nov)
+- **Objetos propios y accesorios** (Escena → Agregar → Objetos propios): piezas simples (caja, cilindro, cono, esfera, media esfera, cápsula, aro, cuña, tubo, pirámide) con tamaño, posición, giro, color, textura y espejo. 12 de partida (espada, lanza, escudo, pistola, bastón de mago, linterna, barril, maceta, banca, poste, machete, libro). Se guardan en «Mis objetos», viajan con la cuenta y **se sostienen con la mano**: siguen a la muñeca en cualquier pose.
+- **Plantas como objetos**: ceiba, roble, pino, palmera, platanera, sauce, mangle con raíces en zancos, árbol seco, arbusto, helecho, flores, pasto, cactus y tronco caído; altura, grosor, follaje y «otra planta de la misma especie».
+- **Exteriores**: ciudad, pueblo, carretera, río en pendiente, lago, manglar, selva, desierto y acantilados, con edificios con ventanas, casas con techo de teja, calles, banquetas, agua, cercas y postes con cables. Cada terreno trae su vegetación.
+- **Atmósferas** (Luz): niebla, lluvia, polvo, humo, calor, noche de luna, amanecer y tormenta; luz, color de cielo y niebla y partículas en 3D.
+- **Criaturas**: placas óseas encimadas como tejas, joroba, patas delanteras con largo y grosor propios; desde tu dibujo se mide también la línea del lomo y el grosor relativo de las patas.
+- **Comunidad**: perfil público (usuario, nombre, foto, biografía), galería con filtros, búsqueda y orden, página de cada artista, «me gusta», reportes (3 reportes ocultan hasta revisión), «usar en Arnés» y «mezclar» solo si el autor lo permite (con crédito). «Compartir» en personajes, criaturas, objetos, viñetas, escenarios, páginas y estilos: enlace sin cuenta (#pieza=) o publicación (#pub=). **Requiere correr `data/supabase-social.sql`.**
+- **Recuperar la cuenta**: «¿Olvidaste tu contraseña?» manda un correo; el enlace regresa a Arnés y pide la contraseña nueva.
+- **Bugs corregidos**: personaje de maniquí guardado salía con cuerpo realista; borrar una viñeta dejaba recuadros de página apuntando a la nada; color de piel desde Escena no cambiaba el cuerpo realista; escalar una criatura no estiraba niebla, cámara ni sombras; la lectura con IA no aplicaba el tipo de cuerpo al cuerpo realista; sin internet se cerraba la sesión; borrar la cuenta dejaba los .glb en la nube; la copa de un árbol aplastaba (por contacto) a quien estuviera debajo; un árbol sin copa generaba geometría inválida; el gizmo quedaba pegado a la luz vieja tras cambiar la atmósfera.
+
 ## Fase 6 · bloques 0 y 1 (19-nov)
 - **Servicios de IA** (Luz → Servicios de IA): Gemini, OpenRouter, OpenAI, Groq, Mistral, xAI, Anthropic (solo leer) y cualquier servicio compatible con OpenAI. Cada ficha trae el enlace para sacar la clave, modelos para leer y para dibujar, «Probar», y el orden de respaldo: si uno falla o se queda sin cuota, Arnés prueba el siguiente. Las claves viven solo en el dispositivo. Todo lo de IA conserva su camino sin IA.
 - **Estilos aprendidos editables**: cada parámetro se ajusta a mano, se duplica (versiones) y se mezcla con otro estilo.
